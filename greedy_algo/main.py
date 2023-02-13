@@ -77,7 +77,26 @@ class Setting1(torch.nn.Module):
         mu, alpha, output = self.do_forward(history, next_time_slot)
         print('chosen time_slot', output)
 
+    def greedy_algo(self, history: History, next_time_slot):
+        current_history = history
+        pending_history = next_time_slot
+
+        while (pending_history.shape[1] > 0):
+            mu, alpha, output = self.do_forward(
+                current_history, pending_history)
+            current_history.time_slots = torch.cat(
+                (current_history.time_slots, pending_history[:, output.argmin()].reshape((1, -1))), dim=1)
+            pending_history = pending_history[:, output.argmin()+1:]
+            print(current_history.time_slots, pending_history)
+
+    def test_greedy_algo(self):
+        history = History([0, 0.25, 0.5, 0.75, 1])
+        print('history', history.time_slots, history.time_slots.shape)
+        next_time_slot = torch.Tensor([[1.01, 1.15, 1.25, 1.5, 1.75, 2.0]])
+        print('next_time_slot', next_time_slot, next_time_slot.shape)
+        self.greedy_algo(history, next_time_slot)
+
 
 if __name__ == '__main__':
     setting1 = Setting1()
-    setting1.test_do_forward()
+    setting1.test_greedy_algo()
