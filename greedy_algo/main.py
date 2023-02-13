@@ -36,24 +36,6 @@ class Model(torch.nn.Module):
                                                                (self.next_time_slot-self.times))).sum(dim=1).reshape((-1, 1)) - (mu_sq.T*self.next_time_slot)
         return -values
 
-    def get_gradient(self):
-        times_delta = torch.maximum(self.times.unsqueeze(
-            2) - self.times.unsqueeze(1), torch.Tensor([0])).reshape((self.num_time_slots, self.history_length, self.history_length))
-        times_delta[times_delta == 0] = np.inf
-        times_delta *= self.omega
-        mu_sq = self.mu**2
-        alpha_sq = self.alpha**2
-        summed = (1/torch.log(mu_sq.T + alpha_sq.T *
-                           torch.exp(-times_delta).sum(dim=1))).sum(dim=1).reshape((self.num_time_slots, 1))
-        dmu = summed - (self.next_time_slot)
-
-
-        summed = (torch.exp(-times_delta).sum(dim=1)/torch.log(mu_sq.T + alpha_sq.T *
-                           torch.exp(-times_delta).sum(dim=1))).sum(dim=1).reshape((self.num_time_slots, 1))
-        dalpha = summed - (1/self.omega)*(1-torch.exp(-self.omega *
-                                                               (self.next_time_slot-self.times))).sum(dim=1).reshape((-1, 1)) 
-        
-        return torch.cat((dmu, dalpha), dim=1)
 
 class Setting1(torch.nn.Module):
     def __init__(self):
@@ -79,35 +61,13 @@ class Setting1(torch.nn.Module):
         while (idx < self.num_epochs):
             sgd.zero_grad()
             output = model.forward()
-            output.backward(gradient=torch.tensor([[1.] * size]).T)#model.get_gradient())
+            output.backward(gradient=torch.tensor([[1.] * size]).T)
             sgd.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             last_mu = model.mu
             last_alpha = model.alpha
-            # print(idx, last_alpha, last_mu, change, output)
             idx += 1
-        # print(output)
-        # print(model.mu, model.alpha)
         return model.mu, model.alpha, output
-
-    # def likelihood_maximum(self, history: History, next_time_slot: torch.Tensor, mu, alpha):
-    #     mu = mu.reshape((-1, 1))
-    #     alpha = alpha.reshape((-1, 1))
-
-    #     exponent = self.alpha / self.omega * \
-    #         torch.sum(torch.exp((next_time_slot.T - history.time_slots)
-    #                   * -1 * self.omega), 1).reshape((-1, 1))
-    #     updates = -1 * self.mu * next_time_slot.T + exponent + \
-    #         torch.log(self.mu + self.omega * exponent)
-    #     print(updates.T[0])
-    #     return next_time_slot[torch.argmax(updates.T[0], dim=0)]
-
-    # def test_likelihood_maximum(self):
-    #     history = History([0, 0.25, 0.5, 0.75, 1])
-    #     print('history', history.time_slots, history.time_slots.shape)
-    #     next_time_slot = torch.Tensor([[1.01, 1.15, 1.25, 1.5, 1.75, 2.0]])
-    #     print('next_time_slot', next_time_slot, next_time_slot.shape)
-    #     print('chosen time_slot', self.likelihood_maximum(history, next_time_slot))
 
     def test_do_forward(self):
         history = History([0, 0.25, 0.5, 0.75, 1])
