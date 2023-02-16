@@ -51,28 +51,26 @@ class Setting1(torch.nn.Module):
     def do_forward(self, history: History, next_time_slot):
         size = next_time_slot.shape[0]
         model = Model(history, next_time_slot, self.omega)
-        sgd = torch.optim.SGD(model.parameters(), lr=0.005)
+        optim = torch.optim.Adam(model.parameters(), lr=0.05, betas=(0.9, 0.999))
         last_mu = torch.Tensor([0.5] * size).reshape((-1, 1))
         last_alpha = torch.Tensor([0.5] * size).reshape((-1, 1))
 
         idx = 0
         while (idx < self.num_epochs):
-            sgd.zero_grad()
+            optim.zero_grad()
             output = model.forward()
             print(output.tolist())
             # output.backward(gradient = torch.ones(output.shape))
             output.sum().backward()
-            sgd.step()
+            optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             last_mu = model.mu
             last_alpha = model.alpha
             idx += 1
         return model.mu, model.alpha, output
 
-    def test_do_forward(self):
-        history = History(np.arange(10, 0.5))
+    def test_do_forward(self, history, next_time_slot):
         print('history', history.time_slots, history.time_slots.shape)
-        next_time_slot = torch.Tensor([10.1, 10.2, 10.25])
         print('next_time_slot', next_time_slot, next_time_slot.shape)
         mu, alpha, output = self.do_forward(history, next_time_slot)
         print('chosen time_slot', output)
@@ -85,18 +83,18 @@ class Setting1(torch.nn.Module):
             mu, alpha, output = self.do_forward(current_history, pending_history)
             current_history.time_slots = torch.cat((current_history.time_slots, torch.Tensor([pending_history[output.argmin()]])), dim=0)
             pending_history = pending_history[output.argmin()+1:]
-            # print("-"*50)
-            # print(mu.data.tolist(), output.tolist())
-            # print("-"*50)
-            # print(len(current_history.time_slots), len(pending_history))
+            print("-"*50)
+            print(mu.data.tolist(), output.tolist())
+            print("-"*50)
+            print(len(current_history.time_slots), len(pending_history))
 
-    def test_greedy_algo(self):
-        history = History(np.arange(0, 50, 10))
+    def test_greedy_algo(self, history, next_time_slot):
         # print('history', history.time_slots, history.time_slots.shape)
-        next_time_slot = torch.Tensor(np.arange(50, 70, 10))
         # print('next_time_slot', next_time_slot, next_time_slot.shape)
         self.greedy_algo(history, next_time_slot)
 
 if __name__ == '__main__':
     setting1 = Setting1()
-    setting1.test_greedy_algo()
+    history = History(np.arange(0, 50, 10))
+    next_time_slot = torch.Tensor(np.arange(50, 70, 10))
+    setting1.test_greedy_algo(history, next_time_slot)
