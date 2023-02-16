@@ -16,7 +16,8 @@ class Model(torch.nn.Module):
         self.num_time_slots = self.next_time_slot.shape[0]
         self.history_length = self.history.shape[1] + 1
         self.times = torch.cat((self.history.expand(
-            self.next_time_slot.size(0), -1), self.next_time_slot), dim=1).reshape((self.num_time_slots, self.history_length))
+            self.next_time_slot.size(0), -1), self.next_time_slot), dim=1)
+        assert self.times.shape == (self.num_time_slots, self.history_length)
         self.mu = torch.nn.Parameter(torch.Tensor(
             [[1] * self.num_time_slots]))
         self.alpha = torch.nn.Parameter(torch.Tensor(
@@ -72,7 +73,7 @@ class Setting1(torch.nn.Module):
     def test_do_forward(self):
         history = History([0, 0.25, 0.5, 0.75, 1])
         print('history', history.time_slots, history.time_slots.shape)
-        next_time_slot = torch.Tensor([[1.01, 1.15, 1.25, 1.5, 1.75, 2.0]])
+        next_time_slot = torch.Tensor([[1.01, 1.5, 1.75, 2.0]])
         print('next_time_slot', next_time_slot, next_time_slot.shape)
         mu, alpha, output = self.do_forward(history, next_time_slot)
         print('chosen time_slot', output)
@@ -92,11 +93,11 @@ class Setting1(torch.nn.Module):
     def test_greedy_algo(self):
         history = History([0, 0.25, 0.5, 0.75, 1])
         print('history', history.time_slots, history.time_slots.shape)
-        next_time_slot = torch.Tensor([[1.01, 1.15, 1.25, 1.5, 1.75, 2.0]])
+        next_time_slot = torch.Tensor([[1.01, 1.75, 2.0]])
         print('next_time_slot', next_time_slot, next_time_slot.shape)
         self.greedy_algo(history, next_time_slot)
 
 
 if __name__ == '__main__':
     setting1 = Setting1()
-    setting1.test_greedy_algo()
+    setting1.test_do_forward()
