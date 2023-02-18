@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from tick.plot import plot_point_process
 from tick.hawkes import SimuHawkes, HawkesKernelSumExp
+import Hawkes as hk
 
 
 class History:
@@ -121,17 +122,23 @@ class Setting1(torch.nn.Module):
         self.greedy_algo(history, next_time_slot)
     
     def simulate_hawkes(self, mu, alpha, omega, num_time_stamps, run_time):
-        mu = 2
-        alpha_times_omega = alpha*omega
-        hawkes = SimuHawkes(end_time=run_time, verbose=False, baseline=np.array([mu]), seed=1398,max_jumps = num_time_stamps)
-        kernel = HawkesKernelSumExp([alpha_times_omega], [omega])
-        hawkes.set_kernel(0, 0, kernel)
+        # mu = 2
+        # alpha_times_omega = alpha*omega
+        # hawkes = SimuHawkes(end_time=run_time, verbose=False, baseline=np.array(
+        #     [mu]), seed=1398, max_jumps=num_time_stamps)
+        # kernel = HawkesKernelSumExp([alpha_times_omega], [omega])
+        # hawkes.set_kernel(0, 0, kernel)
 
-        dt = 0.01
-        hawkes.track_intensity(dt)
-        hawkes.simulate()
-        timestamps = hawkes.timestamps
-        return timestamps[0]
+        # dt = 0.01
+        # hawkes.track_intensity(dt)
+        # hawkes.simulate()
+        # timestamps = hawkes.timestamps
+        para = {'mu':mu, 'alpha':alpha, 'beta':omega}
+        model = hk.simulator().set_kernel('exp').set_baseline('const').set_parameter(para)
+        itv = [0,run_time] # the observation interval
+        T = model.simulate(itv)
+        timestamps = np.array(T[:num_time_stamps])
+        return timestamps
 
 if __name__ == '__main__':
     setting1 = Setting1()

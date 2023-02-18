@@ -1,6 +1,7 @@
 from __future__ import annotations
 import torch
 import numpy as np
+import Hawkes as hk
 # from tick.plot import plot_point_process
 # from tick.hawkes import SimuHawkes, HawkesKernelSumExp
 
@@ -53,8 +54,8 @@ class Setting1(torch.nn.Module):
         super().__init__()
         self.mu = torch.nn.Parameter(torch.Tensor([1]))
         self.alpha = torch.nn.Parameter(torch.Tensor([1]))
-        self.omega = 1
-        self.num_epochs = 50
+        self.omega = 2
+        self.num_epochs = 500
 
     def excitation_intensity(self, history: History, t: int):
         exponents = (t - history.time_slots)
@@ -64,7 +65,7 @@ class Setting1(torch.nn.Module):
         size = next_time_slot.shape[0]
         model = Model(history, next_time_slot, self.omega)
         optim = torch.optim.Adam(
-            model.parameters(), lr=0.1, betas=(0.9, 0.999))
+            model.parameters(), lr=0.01, betas=(0.9, 0.999))
         last_mu = torch.zeros_like(model.mu.data)
         last_alpha = torch.zeros_like(model.alpha.data)
 
@@ -130,15 +131,18 @@ class Setting1(torch.nn.Module):
         # hawkes.track_intensity(dt)
         # hawkes.simulate()
         # timestamps = hawkes.timestamps
-        timestamps = np.load('timestamps.npy')
-        print(timestamps.size)
+        para = {'mu':mu, 'alpha':alpha, 'beta':omega}
+        model = hk.simulator().set_kernel('exp').set_baseline('const').set_parameter(para)
+        itv = [0,run_time] # the observation interval
+        T = model.simulate(itv)
+        timestamps = np.array(T[:num_time_stamps])
         return timestamps
 
 
 if __name__ == '__main__':
     setting1 = Setting1()
     timestamps = setting1.simulate_hawkes(
-        mu=0.1, alpha=1, omega=1, num_time_stamps=1000, run_time=4000)
+        mu=0.1, alpha=1, omega=2, num_time_stamps=1000, run_time=100)
     # intensity = hawkes.tracked_intensity
     # intensity_times = hawkes.intensity_tracked_times
     history = History(timestamps[:-1])
