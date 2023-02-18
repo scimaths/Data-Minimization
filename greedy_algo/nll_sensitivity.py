@@ -1,6 +1,8 @@
 from __future__ import annotations
 import torch
 import numpy as np
+from tick.plot import plot_point_process
+from tick.hawkes import SimuHawkes, HawkesKernelSumExp
 
 
 class History:
@@ -97,6 +99,7 @@ class Setting1(torch.nn.Module):
         print('next_time_slot', next_time_slot, next_time_slot.shape)
         mu, alpha, output = self.do_forward(history, next_time_slot)
         print('chosen time_slot', output)
+        print('mu', mu, 'alpha', alpha)
 
     def greedy_algo(self, history: History, next_time_slot):
         current_history = history
@@ -116,9 +119,26 @@ class Setting1(torch.nn.Module):
         print('history', history.time_slots, history.time_slots.shape[0])
         print('next_time_slot', next_time_slot, next_time_slot.shape[0])
         self.greedy_algo(history, next_time_slot)
+    
+    def simulate_hawkes(self, mu, alpha, omega, num_time_stamps, run_time):
+        mu = 2
+        alpha_times_omega = alpha*omega
+        hawkes = SimuHawkes(end_time=run_time, verbose=False, baseline=np.array([mu]), seed=1398,max_jumps = num_time_stamps)
+        kernel = HawkesKernelSumExp([alpha_times_omega], [omega])
+        hawkes.set_kernel(0, 0, kernel)
+
+        dt = 0.01
+        hawkes.track_intensity(dt)
+        hawkes.simulate()
+        timestamps = hawkes.timestamps
+        return timestamps[0]
 
 if __name__ == '__main__':
     setting1 = Setting1()
-    history = History(np.arange(0, 50, 10))
-    next_time_slot = np.arange(50, 71, 10)
-    setting1.test_greedy_algo(history, next_time_slot)
+    timestamps = setting1.simulate_hawkes(mu = 0.1, alpha = 1, omega = 1, num_time_stamps = 1000, run_time = 4000)
+    # intensity = hawkes.tracked_intensity
+    # intensity_times = hawkes.intensity_tracked_times
+    history = History(timestamps[:-1])
+    next_time_slot = timestamps[-1:]
+    # next_time_slot = np.arange(50, 71, 10)
+    setting1.test_do_forward(history, next_time_slot)
