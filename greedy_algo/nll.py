@@ -1,14 +1,18 @@
 from __future__ import annotations
 import torch
 import numpy as np
-import Hawkes as hk
-# from tick.plot import plot_point_process
-# from tick.hawkes import SimuHawkes, HawkesKernelSumExp
 
 
 class History:
     def __init__(self, time_slots: list[int] = []):
         self.time_slots = np.array(time_slots)
+
+    def __len__(self):
+        return len(self.time_slots)
+
+    def add(self, time_slot: int):
+        self.time_slots = np.concatenate(
+            (self.time_slots, [time_slot]), axis=0)
 
 
 class Model(torch.nn.Module):
@@ -46,26 +50,20 @@ class Model(torch.nn.Module):
         alpha_term = (self.alpha/self.omega)*(1-torch.exp(-self.omega *
                                                           (self.final_T-self.times))).sum(dim=1).unsqueeze(1)
         values = summed - alpha_term - (self.mu*self.final_T)
-        return -values #+ (self.alpha**2)*self.lambda_alpha + (self.mu**2)*self.lambda_mu
+        return -values
 
 
 class Setting1(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.mu = torch.nn.Parameter(torch.Tensor([1]))
-        self.alpha = torch.nn.Parameter(torch.Tensor([1]))
         self.omega = 2
         self.num_epochs = 500
 
-    def excitation_intensity(self, history: History, t: int):
-        exponents = (t - history.time_slots)
-        return self.mu + self.alpha * torch.sum((torch.exp(exponents(exponents > 0) * self.omega)))
-
     def do_forward(self, history: History, next_time_slot):
-        size = next_time_slot.shape[0]
         model = Model(history, next_time_slot, self.omega)
         optim = torch.optim.Adam(
             model.parameters(), lr=0.01, betas=(0.9, 0.999))
+        self.history = history.time_slots.reshape(1, -1)
         last_mu = torch.zeros_like(model.mu.data)
         last_alpha = torch.zeros_like(model.alpha.data)
 
@@ -73,7 +71,6 @@ class Setting1(torch.nn.Module):
         while (idx < self.num_epochs):
             optim.zero_grad()
             output = model.forward()
-            # output.backward(gradient = torch.ones(output.shape))
             output.sum().backward()
             optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
@@ -82,13 +79,6 @@ class Setting1(torch.nn.Module):
             idx += 1
         return model.mu.data, model.alpha.data, output
 
-    def test_do_forward(self, history, next_time_slot):
-        # print('history', history.time_slots, history.time_slots.shape)
-        print('next_time_slot', next_time_slot, next_time_slot.shape)
-        mu, alpha, output = self.do_forward(history, next_time_slot)
-        print('chosen time_slot', output)
-        print('mu', mu, 'alpha', alpha)
-
     def greedy_algo(self, history: History, next_time_slot):
         current_history = history
         pending_history = next_time_slot
@@ -96,12 +86,12 @@ class Setting1(torch.nn.Module):
         _, _, curr_history_score = self.do_forward(
             History(history.time_slots[:-1]), history.time_slots[-1:])
         last_score = curr_history_score[0].item()
-        print(history.time_slots, last_score)
+        # print(history.time_slots, last_score)
 
         while (pending_history.shape[0] > 0):
             mu, alpha, output = self.do_forward(
                 current_history, pending_history)
-            print(mu, alpha)
+            # print(mu, alpha)
             if output.min() > last_score:
                 print("Rejected", pending_history[current_history.time_slots.argmin(
                 )], 'Score: ', output.min().item())
@@ -111,41 +101,88 @@ class Setting1(torch.nn.Module):
                 (current_history.time_slots, [pending_history[output.argmin()]]), axis=0)
             pending_history = np.concatenate(
                 [pending_history[:output.argmin()], pending_history[output.argmin()+1:]])
-            print(current_history.time_slots, last_score)
+            # print(current_history.time_slots, last_score)
         return current_history
 
-    def test_greedy_algo(self, history, next_time_slot):
-        # print('history', history.time_slots, history.time_slots.shape)
-        # print('next_time_slot', next_time_slot, next_time_slot.shape)
-        return self.greedy_algo(history, next_time_slot)
+    def predict(self, mu, alpha, history: History):
+        last_time = history.time_slots[-1]
+        lambda_max = mu + alpha * np.exp((last_time - history.time_slots) * -1 * self.omega).sum()
+        while(True):
+            u = np.random.uniform(0, 1)
+            last_time = last_time - (np.log(1-u)/ lambda_max)
+            u2 = np.random.uniform(0, 1)
+            if u2 <= (mu + alpha * np.exp((last_time - history.time_slots) * -1 * self.omega).sum()) / lambda_max:
+                break
+        return last_time
 
-    def simulate_hawkes(self, mu, alpha, omega, num_time_stamps, run_time):
-        # mu = 2
-        # alpha_times_omega = alpha*omega
-        # hawkes = SimuHawkes(end_time=run_time, verbose=False, baseline=np.array(
-        #     [mu]), seed=1398, max_jumps=num_time_stamps)
-        # kernel = HawkesKernelSumExp([alpha_times_omega], [omega])
-        # hawkes.set_kernel(0, 0, kernel)
+    def mode_1(self, history: History, next_time_slot):
+        mu, alpha, _ = self.do_forward(
+            History(history.time_slots[:-1]), history.time_slots[-1:])
+        print(mu, alpha)
+        curr = 0
+        error = 0
+        actual = []
+        pred = []
+        while (curr < next_time_slot.shape[0]):
+            value = self.predict(mu, alpha, history)
+            actual.append(next_time_slot[curr])
+            pred.append(value.item())
+            error += (value-next_time_slot[curr])**2
+            history.add(next_time_slot[curr])
+            curr += 1
 
-        # dt = 0.01
-        # hawkes.track_intensity(dt)
-        # hawkes.simulate()
-        # timestamps = hawkes.timestamps
-        para = {'mu':mu, 'alpha':alpha, 'beta':omega}
-        model = hk.simulator().set_kernel('exp').set_baseline('const').set_parameter(para)
-        itv = [0,run_time] # the observation interval
-        T = model.simulate(itv)
-        timestamps = np.array(T[:num_time_stamps])
-        return timestamps
+        print(error)
+        print(actual)
+        print(pred)
+
+    def mode_2(self, history: History, next_time_slot):
+        new_history = self.greedy_algo(
+            History(history.time_slots[:1]), history.time_slots[1:])
+        print(new_history.time_slots[-1])
+        mu, alpha, _ = self.do_forward(
+            History(new_history.time_slots[:-1]), new_history.time_slots[-1:])
+        print(mu, alpha)
+        curr = 0
+        error = 0
+        actual = []
+        pred = []
+        while (curr < next_time_slot.shape[0]):
+            value = self.predict(mu, alpha, new_history)
+            actual.append(next_time_slot[curr])
+            pred.append(value.item())
+            error += (value-next_time_slot[curr])**2
+            new_history.add(next_time_slot[curr])
+            curr += 1
+
+        print(error)
+        print(actual)
+        print(pred)
 
 
 if __name__ == '__main__':
     setting1 = Setting1()
-    timestamps = setting1.simulate_hawkes(
-        mu=0.1, alpha=1, omega=2, num_time_stamps=1000, run_time=100)
-    # intensity = hawkes.tracked_intensity
-    # intensity_times = hawkes.intensity_tracked_times
-    history = History(timestamps[:-1])
-    next_time_slot = timestamps[-1:]
-    # next_time_slot = np.arange(50, 71, 10)
-    setting1.test_do_forward(history, next_time_slot)
+    train_data = None
+    with open('data_exp16_train.npy', 'rb') as f:
+        train_data = list(np.load(f))
+    train_data_history = History(train_data[:100])
+
+    test_data = None
+    with open('data_exp16_test.npy', 'rb') as f:
+        test_data = list(np.load(f))
+    test_data_history = History(train_data[100:120])
+
+    # Mode 1
+    # Without Data Minimization
+    # Use complete training data to get function params
+    # And then predict on test data
+    # Parameters not updated in between predictions
+    setting1.mode_1(
+        train_data_history, test_data_history.time_slots)
+
+    # Mode 2
+    # With Data Minimization
+    # Use complete training data to get function params and minimized history
+    # And then predict on test data
+    # Parameters not updated in between predictions
+    setting1.mode_2(
+        train_data_history, test_data_history.time_slots)
