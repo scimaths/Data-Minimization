@@ -54,10 +54,13 @@ class Model(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, stochastic_elements, threshCollectTill, threshTau):
         super().__init__()
         self.omega = 2
-        self.num_epochs = 500
+        self.num_epochs = 100
+        self.stochastic_elements = stochastic_elements
+        self.threshCollectTill = threshCollectTill
+        self.threshTau = threshTau
 
     def do_forward(self, history: History, next_time_slot):
         model = Model(history, next_time_slot, self.omega)
@@ -85,9 +88,8 @@ class Setting1(torch.nn.Module):
             idx += 1
         return model.mu.data, model.alpha.data, output
 
-    def greedy_algo(self, history: History, next_time_slot):
+    def greedy_algo(self, history: History, next_time_slot, stochastic_gradient):
         b = history.time_slots.shape[0] + next_time_slot.shape[0]
-        k = 0.5
         current_history = history
         pending_history = next_time_slot
         t = next_time_slot.shape[0]
@@ -97,17 +99,34 @@ class Setting1(torch.nn.Module):
         last_score = curr_history_score[0].item()
 
         while (pending_history.shape[0] > 0):
-            _, _, output = self.do_forward(
-                current_history, pending_history)
-            if output.min() > last_score and (t-pending_history.shape[0]) > k * b:
+            if stochastic_gradient:
+                new_pending_history_indxs = np.random.choice(
+                    pending_history.shape[0], self.stochastic_elements)
+
+                _, _, output = self.do_forward(
+                    current_history, pending_history[new_pending_history_indxs])
+            else:
+                _, _, output = self.do_forward(
+                    current_history, pending_history)
+            
+            if output.min() > last_score + self.threshTau and (t-pending_history.shape[0]) > self.threshCollectTill * b:
                 # print("Rejected", pending_history[current_history.time_slots.argmin(
                 # )], 'Score: ', output.min().item())
                 break
+
             last_score = output.min().item()
-            current_history.time_slots = np.concatenate(
-                (current_history.time_slots, [pending_history[output.argmin()]]), axis=0)
-            pending_history = np.concatenate(
-                [pending_history[:output.argmin()], pending_history[output.argmin()+1:]])
+
+            if stochastic_gradient:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots, [pending_history[new_pending_history_indxs][output.argmin()]]), axis=0)
+                pending_history = np.concatenate(
+                    [pending_history[:new_pending_history_indxs[output.argmin()]], pending_history[new_pending_history_indxs[output.argmin()]+1:]])
+            else:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots, [pending_history[output.argmin()]]), axis=0)
+                pending_history = np.concatenate(
+                    [pending_history[:output.argmin()], pending_history[output.argmin()+1:]])
+            
         return current_history
 
     def predict(self, mu, alpha, history: History):
@@ -138,13 +157,11 @@ class Setting1(torch.nn.Module):
             history.add(next_time_slot[curr])
             curr += 1
 
-        print(error)
-        print(actual)
-        print(pred)
+        return error, actual, pred
 
-    def mode_2(self, history: History, next_time_slot):
-        new_history = self.greedy_algo(
-            History(history.time_slots[:1]), history.time_slots[1:])
+    def mode_2(self, history: History, next_time_slot, stochastic_gradient):
+        new_history: History = self.greedy_algo(
+            History(history.time_slots[:1]), history.time_slots[1:], stochastic_gradient)
         new_history.time_slots = np.sort(new_history.time_slots)
         mu, alpha, _ = self.do_forward(
             History(new_history.time_slots[:-1]), new_history.time_slots[-1:])
@@ -160,31 +177,45 @@ class Setting1(torch.nn.Module):
             new_history.add(next_time_slot[curr])
             curr += 1
 
-        print(error)
-        print(actual)
-        print(pred)
-
+        return error, actual, pred
 
 if __name__ == '__main__':
-    setting1 = Setting1()
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--Mode")
+    parser.add_argument("--StocGrad")
+    parser.add_argument("--StocValue")
+    parser.add_argument("--TrainLen")
+    parser.add_argument("--TestLen")
+    parser.add_argument("--ThreshTau")
+    parser.add_argument("--ThreshCollectTill")
+    args = parser.parse_args()
+    
+    train_len = int(args.TrainLen)
+    test_len = int(args.TestLen)
+    setting1 = Setting1(int(args.StocValue), float(args.ThreshCollectTill), float(args.ThreshTau))
+
     train_data = None
     with open('data_exp16_train.npy', 'rb') as f:
         train_data = list(np.load(f))
-    train_data_history = History(train_data)
+    train_data_history = History(train_data[:train_len])
 
     test_data = None
     with open('data_exp16_test.npy', 'rb') as f:
         test_data = list(np.load(f))
-    test_data_history = History(test_data)
+    test_data_history = History(train_data[train_len:test_len+train_len])
 
-    mode = 1
+    mode = int(args.Mode)
+    stochastic_gradient = bool(args.StocGrad)
+    
     if mode == 1:
         # Mode 1
         # Without Data Minimization
         # Use complete training data to get function params
         # And then predict on test data
         # Parameters not updated in between predictions
-        setting1.mode_1(
+        error, actual, pred = setting1.mode_1(
             train_data_history, test_data_history.time_slots)
     else:
         # Mode 2
@@ -192,5 +223,11 @@ if __name__ == '__main__':
         # Use complete training data to get function params and minimized history
         # And then predict on test data
         # Parameters not updated in between predictions
-        setting1.mode_2(
-            train_data_history, test_data_history.time_slots)
+        error, actual, pred = setting1.mode_2(
+            train_data_history, test_data_history.time_slots, stochastic_gradient)
+    import json
+    with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+        data = {"Error": error.item(), "Actual": actual, "Pred": pred}
+        obj = json.dumps(data) + "\n"
+        json_bytes = obj.encode('utf-8')
+        f.write(json_bytes)
