@@ -80,21 +80,9 @@ class Setting1(torch.nn.Module):
             optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             
-            less_than_zero_alpha = []
-            for i in range(model.alpha.data.shape[0]):
-                if model.alpha.data[i] < 0:
-                    less_than_zero_alpha.append(i)
-                    break            
+            model.alpha.data = torch.maximum(model.alpha.data, 1e-3)
             
-            model.alpha.data[less_than_zero_alpha] = torch.zeros_like(model.alpha.data[less_than_zero_alpha]) + 1e-3
-            
-            less_than_zero_mu = []
-            for i in range(model.mu.data.shape[0]):
-                if model.mu.data[i] < 0:
-                    less_than_zero_mu.append(i)
-                    break
-            
-            model.mu.data[less_than_zero_mu] = torch.zeros_like(model.mu.data[less_than_zero_mu]) + 1e-3
+            model.mu.data = torch.maximum(model.mu.data, 1e-3)
 
             last_mu = model.mu.data
             last_alpha = model.alpha.data
