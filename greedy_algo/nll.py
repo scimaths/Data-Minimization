@@ -80,21 +80,21 @@ class Setting1(torch.nn.Module):
             optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             
-            less_than_zero_alpha = False
+            less_than_zero_alpha = []
             for i in range(model.alpha.data.shape[0]):
                 if model.alpha.data[i] < 0:
-                    less_than_zero_alpha = True
+                    less_than_zero_alpha.append(i)
                     break            
-            if less_than_zero_alpha:
-                model.alpha.data = torch.zeros_like(model.alpha.data) + 1e-3
             
-            less_than_zero_mu = False
+            model.alpha.data[less_than_zero_alpha] = torch.zeros_like(model.alpha.data[less_than_zero_alpha]) + 1e-3
+            
+            less_than_zero_mu = []
             for i in range(model.mu.data.shape[0]):
                 if model.mu.data[i] < 0:
-                    less_than_zero_mu = True
+                    less_than_zero_mu.append(i)
                     break
-            if less_than_zero_mu:
-                model.mu.data = torch.zeros_like(model.mu.data) + 1e-3
+            
+            model.mu.data[less_than_zero_mu] = torch.zeros_like(model.mu.data[less_than_zero_mu]) + 1e-3
 
             last_mu = model.mu.data
             last_alpha = model.alpha.data
@@ -254,9 +254,9 @@ if __name__ == '__main__':
         with open("mu-mode-2", 'w') as f:
             f.write(str(setting1.mu_data))
 
-    # import json
-    # with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
-    #     data = {"Error": error.item(), "Actual": actual, "Pred": pred}
-    #     obj = json.dumps(data) + "\n"
-    #     json_bytes = obj.encode('utf-8')
-    #     f.write(json_bytes)
+    import json
+    with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+        data = {"Error": error.item(), "Actual": actual, "Pred": pred}
+        obj = json.dumps(data) + "\n"
+        json_bytes = obj.encode('utf-8')
+        f.write(json_bytes)
