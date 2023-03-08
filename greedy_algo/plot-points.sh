@@ -1,11 +1,11 @@
 #!/bin/bash
-for mode in 1
+for mode in 2
 do
     for stoc in True
     do
         for val in 60
         do 
-            for trainlen in 1600 1800
+            for trainlen in 1000
             do
                 for testlen in 500
                 do

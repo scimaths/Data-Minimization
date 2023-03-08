@@ -57,15 +57,18 @@ class Setting1(torch.nn.Module):
     def __init__(self, stochastic_elements, threshCollectTill, threshTau):
         super().__init__()
         self.omega = 2
-        self.num_epochs = 100
+        self.num_epochs = 3
         self.stochastic_elements = stochastic_elements
         self.threshCollectTill = threshCollectTill
         self.threshTau = threshTau
+        self.likelihood_data = []
+        self.mu_data = []
+        self.alpha_data = []
 
     def do_forward(self, history: History, next_time_slot):
         model = Model(history, next_time_slot, self.omega)
         optim = torch.optim.Adam(
-            model.parameters(), lr=0.01, betas=(0.9, 0.999))
+            model.parameters(), lr=1e-2, betas=(0.9, 0.999))
         last_mu = torch.zeros_like(model.mu.data)
         last_alpha = torch.zeros_like(model.alpha.data)
 
@@ -76,16 +79,27 @@ class Setting1(torch.nn.Module):
             output.sum().backward()
             optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
-            less_than_zero = False
+            
+            less_than_zero_alpha = False
             for i in range(model.alpha.data.shape[0]):
                 if model.alpha.data[i] < 0:
-                    less_than_zero = True
+                    less_than_zero_alpha = True
+                    break            
+            if less_than_zero_alpha:
+                model.alpha.data = torch.zeros_like(model.alpha.data) + 1e-3
+            
+            less_than_zero_mu = False
+            for i in range(model.mu.data.shape[0]):
+                if model.mu.data[i] < 0:
+                    less_than_zero_mu = True
                     break
-            if less_than_zero:
-                model.alpha.data = torch.zeros_like(model.alpha.data)
+            if less_than_zero_mu:
+                model.mu.data = torch.zeros_like(model.mu.data) + 1e-3
+
             last_mu = model.mu.data
             last_alpha = model.alpha.data
             idx += 1
+
         return model.mu.data, model.alpha.data, output
 
     def greedy_algo(self, history: History, next_time_slot, stochastic_gradient):
@@ -103,16 +117,20 @@ class Setting1(torch.nn.Module):
                 new_pending_history_indxs = np.random.choice(
                     pending_history.shape[0], self.stochastic_elements)
 
-                _, _, output = self.do_forward(
+                mu, alpha, output = self.do_forward(
                     current_history, pending_history[new_pending_history_indxs])
             else:
-                _, _, output = self.do_forward(
+                mu, alpha, output = self.do_forward(
                     current_history, pending_history)
             
             if output.min() > last_score + self.threshTau and (t-pending_history.shape[0]) > self.threshCollectTill * b:
                 # print("Rejected", pending_history[current_history.time_slots.argmin(
                 # )], 'Score: ', output.min().item())
                 break
+
+            self.likelihood_data.append(output)
+            self.mu_data.append(mu)
+            self.alpha_data.append(alpha)
 
             last_score = output.min().item()
 
@@ -217,6 +235,7 @@ if __name__ == '__main__':
         # Parameters not updated in between predictions
         error, actual, pred = setting1.mode_1(
             train_data_history, test_data_history.time_slots)
+
     else:
         # Mode 2
         # With Data Minimization
@@ -225,9 +244,19 @@ if __name__ == '__main__':
         # Parameters not updated in between predictions
         error, actual, pred = setting1.mode_2(
             train_data_history, test_data_history.time_slots, stochastic_gradient)
-    import json
-    with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
-        data = {"Error": error.item(), "Actual": actual, "Pred": pred}
-        obj = json.dumps(data) + "\n"
-        json_bytes = obj.encode('utf-8')
-        f.write(json_bytes)
+
+        with open("likelihood-mode-2", 'w') as f:
+            f.write(str(setting1.likelihood_data))
+
+        with open("alpha-mode-2", 'w') as f:
+            f.write(str(setting1.alpha_data))
+
+        with open("mu-mode-2", 'w') as f:
+            f.write(str(setting1.mu_data))
+
+    # import json
+    # with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+    #     data = {"Error": error.item(), "Actual": actual, "Pred": pred}
+    #     obj = json.dumps(data) + "\n"
+    #     json_bytes = obj.encode('utf-8')
+    #     f.write(json_bytes)
