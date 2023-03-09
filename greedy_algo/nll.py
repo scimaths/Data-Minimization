@@ -16,14 +16,16 @@ class History:
 
 
 class Model(torch.nn.Module):
-    def __init__(self, history, next_time_slot, omega, lambda_mu=10, lambda_alpha=15):
+    def __init__(self, history, next_time_slot, omega, final_T=None, lambda_mu=10, lambda_alpha=15):
         super().__init__()
-        self.history = history.time_slots.reshape(1, -1)
-        self.next_time_slot = next_time_slot.reshape(-1, 1)
+        self.history = np.sort(history.time_slots).reshape(1, -1)
+        self.next_time_slot = np.sort(next_time_slot).reshape(-1, 1)
         self.num_time_slots = self.next_time_slot.shape[0]
         self.history_length = self.history.shape[1] + 1
         epsilon = 1
-        self.final_T = np.max(self.next_time_slot) + epsilon
+        self.final_T = final_T
+        if not final_T:
+            self.final_T = np.max(self.next_time_slot) + epsilon
 
         self.times = torch.Tensor(np.concatenate(
             (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1))
@@ -39,6 +41,8 @@ class Model(torch.nn.Module):
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
+        if torch.sum(times_delta < 0) > 0:
+            print(torch.sum(times_delta < 0))
         assert times_delta.shape == (
             self.num_time_slots, self.history_length, self.history_length)
 
@@ -54,10 +58,11 @@ class Model(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, stochastic_elements, threshCollectTill, threshTau):
+    def __init__(self, stochastic_elements, threshCollectTill, threshTau, final_T):
         super().__init__()
         self.omega = 2
         self.num_epochs = 3
+        self.final_T = final_T
         self.stochastic_elements = stochastic_elements
         self.threshCollectTill = threshCollectTill
         self.threshTau = threshTau
@@ -66,9 +71,9 @@ class Setting1(torch.nn.Module):
         self.alpha_data = []
 
     def do_forward(self, history: History, next_time_slot):
-        model = Model(history, next_time_slot, self.omega)
+        model = Model(history, next_time_slot, self.omega, final_T=self.final_T)
         optim = torch.optim.Adam(
-            model.parameters(), lr=1e-2, betas=(0.9, 0.999))
+            model.parameters(), lr=1e-4, betas=(0.9, 0.999))
         last_mu = torch.zeros_like(model.mu.data)
         last_alpha = torch.zeros_like(model.alpha.data)
 
@@ -80,9 +85,8 @@ class Setting1(torch.nn.Module):
             optim.step()
             change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             
-            model.alpha.data = torch.maximum(model.alpha.data, 1e-3)
-            
-            model.mu.data = torch.maximum(model.mu.data, 1e-3)
+            model.alpha.data = torch.maximum(torch.nan_to_num(model.alpha.data), torch.Tensor([1e-3]))
+            model.mu.data = torch.maximum(torch.nan_to_num(model.mu.data), torch.Tensor([1e-3]))
 
             last_mu = model.mu.data
             last_alpha = model.alpha.data
@@ -110,15 +114,15 @@ class Setting1(torch.nn.Module):
             else:
                 mu, alpha, output = self.do_forward(
                     current_history, pending_history)
-            
+
             if output.min() > last_score + self.threshTau and (t-pending_history.shape[0]) > self.threshCollectTill * b:
                 # print("Rejected", pending_history[current_history.time_slots.argmin(
                 # )], 'Score: ', output.min().item())
                 break
 
-            self.likelihood_data.append(output)
-            self.mu_data.append(mu)
-            self.alpha_data.append(alpha)
+            self.likelihood_data.append(output.min().item())
+            self.mu_data.append(mu[:,0])
+            self.alpha_data.append(alpha[:,0])
 
             last_score = output.min().item()
 
@@ -200,7 +204,6 @@ if __name__ == '__main__':
     
     train_len = int(args.TrainLen)
     test_len = int(args.TestLen)
-    setting1 = Setting1(int(args.StocValue), float(args.ThreshCollectTill), float(args.ThreshTau))
 
     train_data = None
     with open('data_exp16_train.npy', 'rb') as f:
@@ -211,6 +214,8 @@ if __name__ == '__main__':
     with open('data_exp16_test.npy', 'rb') as f:
         test_data = list(np.load(f))
     test_data_history = History(train_data[train_len:test_len+train_len])
+
+    setting1 = Setting1(int(args.StocValue), float(args.ThreshCollectTill), float(args.ThreshTau), final_T=np.max(train_data_history.time_slots))
 
     mode = int(args.Mode)
     stochastic_gradient = bool(args.StocGrad)
@@ -233,14 +238,14 @@ if __name__ == '__main__':
         error, actual, pred = setting1.mode_2(
             train_data_history, test_data_history.time_slots, stochastic_gradient)
 
-        with open("likelihood-mode-2", 'w') as f:
-            f.write(str(setting1.likelihood_data))
+        # with open("likelihood-mode-2", 'w') as f:
+        #     f.write("\n".join(map(str, setting1.likelihood_data)))
 
-        with open("alpha-mode-2", 'w') as f:
-            f.write(str(setting1.alpha_data))
+        # with open("alpha-mode-2", 'w') as f:
+        #     f.write("\n".join(map(str, setting1.alpha_data)))
 
-        with open("mu-mode-2", 'w') as f:
-            f.write(str(setting1.mu_data))
+        # with open("mu-mode-2", 'w') as f:
+        #     f.write("\n".join(map(str, setting1.mu_data)))
 
     import json
     with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:

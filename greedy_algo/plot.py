@@ -31,7 +31,7 @@ print(data_1b, data_2b)
 import matplotlib.pyplot as plt
 plt.scatter(data_1a, data_1b, label="w/o Data Minimization")
 plt.scatter(data_2a, data_2b, label="with Data Minimization")
-plt.xlabel("Number of time slots")
+plt.xlabel("Number of time slots used to train")
 plt.ylabel("Error")
 plt.legend()
 # plt.show()
