@@ -248,7 +248,7 @@ if __name__ == '__main__':
         #     f.write("\n".join(map(str, setting1.mu_data)))
 
     import json
-    with open(f'mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+    with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
         data = {"Error": error.item(), "Actual": actual, "Pred": pred}
         obj = json.dumps(data) + "\n"
         json_bytes = obj.encode('utf-8')

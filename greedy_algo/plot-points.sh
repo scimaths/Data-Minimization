@@ -9,11 +9,12 @@ do
             do
                 for testlen in 500
                 do
-                    for tau in 5
+                    for tau in 0
                     do
                         for coll in 0.8
                         do
                             python3 nll.py --Mode $mode --StocValue $val --StocGrad $stoc --TrainLen $trainlen --TestLen $testlen --ThreshTau $tau --ThreshCollectTill $coll
+                            python3 nll_reverse.py --Mode $mode --StocValue $val --StocGrad $stoc --TrainLen $trainlen --TestLen $testlen --ThreshTau $tau --ThreshRemoveTill $coll
                         done
                     done
                 done
