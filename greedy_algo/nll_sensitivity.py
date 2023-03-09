@@ -67,7 +67,7 @@ class Setting1(torch.nn.Module):
     def __init__(self, sensitivity_weight=0.5):
         super().__init__()
         self.omega = 2
-        self.num_epochs = 500
+        self.num_epochs = 100
         self.sensitivity_weight = sensitivity_weight
 
     def do_forward(self, history: History, next_time_slot):

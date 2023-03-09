@@ -5,16 +5,16 @@ do
     do
         for val in 60
         do 
-            for trainlen in 400 600 800 1000 1200 1400 
+            for trainlen in 1200 
             do
                 for testlen in 500
                 do
                     for tau in 0
                     do
-                        for coll in 0.8
+                        for coll in 0.5 0.6 0.8 0.9 1.0
                         do
                             python3 nll.py --Mode $mode --StocValue $val --StocGrad $stoc --TrainLen $trainlen --TestLen $testlen --ThreshTau $tau --ThreshCollectTill $coll
-                            python3 nll_reverse.py --Mode $mode --StocValue $val --StocGrad $stoc --TrainLen $trainlen --TestLen $testlen --ThreshTau $tau --ThreshRemoveTill $coll
+                            # python3 nll_reverse.py --Mode $mode --StocValue $val --StocGrad $stoc --TrainLen $trainlen --TestLen $testlen --ThreshTau $tau --ThreshRemoveTill $coll
                         done
                     done
                 done
