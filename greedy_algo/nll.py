@@ -23,7 +23,7 @@ class Model(torch.nn.Module):
         self.next_time_slot = np.sort(next_time_slot).reshape(-1, 1)
 
         # TODO: assert if next time slot is greater than history
-        assert np.min(self.next_time_slot) > np.max(self.history)
+        # assert np.min(self.next_time_slot) > np.max(self.history)
 
         self.num_time_slots = self.next_time_slot.shape[0]
         self.history_length = self.history.shape[1] + 1
@@ -40,23 +40,16 @@ class Model(torch.nn.Module):
             (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1))
         assert self.times.shape == (self.num_time_slots, self.history_length)
 
-        self.mu = mu
-        if self.mu is None:
-            self.mu = torch.nn.Parameter(
-                torch.Tensor([[1]] * self.num_time_slots))
+        
 
-        self.alpha = alpha
-        if self.alpha is None:
-            self.alpha = torch.nn.Parameter(
-                torch.Tensor([[1]] * self.num_time_slots))
 
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
 
         # :TODO remove statement below
-        if torch.sum(times_delta < 0) > 0:
-            print(torch.sum(times_delta < 0))
+        # if torch.sum(times_delta < 0) > 0:
+        #     print(torch.sum(times_delta < 0))
 
         assert times_delta.shape == (
             self.num_time_slots, self.history_length, self.history_length)
@@ -88,6 +81,7 @@ class Setting1(torch.nn.Module):
         self.likelihood_data = []
         self.mu_data = []
         self.alpha_data = []
+        self.indexes_added = []
 
     def do_forward(self, history: History, next_time_slot, mu=None, alpha=None):
         model = Model(history, next_time_slot,
@@ -154,6 +148,7 @@ class Setting1(torch.nn.Module):
             self.likelihood_data.append(output.min().item())
             self.mu_data.append(mu[:, 0])
             self.alpha_data.append(alpha[:, 0])
+            self.indexes_added.append(new_pending_history_indxs[output.argmin()])
 
             if stochastic_gradient:
                 current_history.time_slots = np.concatenate(
@@ -206,6 +201,7 @@ class Setting1(torch.nn.Module):
             History(history.time_slots[:1]), history.time_slots[1:], stochastic_gradient)
 
         new_history.time_slots = np.sort(new_history.time_slots)
+        new_history_len = new_history.__len__()
 
         mu, alpha, _ = self.do_forward(
             History(new_history.time_slots[:-1]), new_history.time_slots[-1:])
@@ -214,6 +210,7 @@ class Setting1(torch.nn.Module):
         error = 0
         actual = []
         pred = []
+        
 
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, new_history)
@@ -223,7 +220,7 @@ class Setting1(torch.nn.Module):
             new_history.add(next_time_slot[curr])
             curr += 1
 
-        return error, actual, pred
+        return error, actual, pred, new_history_len
 
 
 if __name__ == '__main__':
@@ -281,11 +278,14 @@ if __name__ == '__main__':
         # Use complete training data to get function params and minimized history
         # And then predict on test data
         # Parameters not updated in between predictions
-        error, actual, pred = setting1.mode_2(
+        error, actual, pred, new_history_len = setting1.mode_2(
             train_data_history, test_data_history.time_slots, stochastic_gradient)
 
-        # with open("likelihood-mode-2", 'w') as f:
+        # with open("likelihood-mode-2-0.6", 'a') as f:
         #     f.write("\n".join(map(str, setting1.likelihood_data)))
+
+        # with open("indexes-added-mode-2", 'a') as f:
+        #     f.write("\n".join(map(str, setting1.indexes_added)))
 
         # with open("alpha-mode-2", 'w') as f:
         #     f.write("\n".join(map(str, setting1.alpha_data)))
@@ -293,9 +293,12 @@ if __name__ == '__main__':
         # with open("mu-mode-2", 'w') as f:
         #     f.write("\n".join(map(str, setting1.mu_data)))
 
+        # with open(f'degree-of-minimization', 'a') as f:
+        #     f.write(f'{train_len}, {new_history_len}, {error}\n')
+
     import json
     with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
-        data = {"Error": error.item(), "Actual": actual, "Pred": pred}
+        data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
         obj = json.dumps(data) + "\n"
         json_bytes = obj.encode('utf-8')
         f.write(json_bytes)
