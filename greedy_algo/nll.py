@@ -22,9 +22,6 @@ class Model(torch.nn.Module):
         self.history = np.sort(history.time_slots).reshape(1, -1)
         self.next_time_slot = np.sort(next_time_slot).reshape(-1, 1)
 
-        # TODO: assert if next time slot is greater than history
-        # assert np.min(self.next_time_slot) > np.max(self.history)
-
         self.num_time_slots = self.next_time_slot.shape[0]
         self.history_length = self.history.shape[1] + 1
         self.omega = omega
@@ -40,16 +37,25 @@ class Model(torch.nn.Module):
             (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1))
         assert self.times.shape == (self.num_time_slots, self.history_length)
 
-        
+        if mu is None:
+            self.mu = torch.nn.Parameter(
+                torch.Tensor([[1]] * self.num_time_slots))
+        else:
+            self.mu = torch.nn.Parameter(torch.Tensor(mu))
+
+        if alpha is None:
+            self.alpha = torch.nn.Parameter(
+                torch.Tensor([[1]] * self.num_time_slots))
+        else:
+            self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
+        self.omega = omega
+        self.lambda_mu = lambda_mu
+        self.lambda_alpha = lambda_alpha
 
 
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
-
-        # :TODO remove statement below
-        # if torch.sum(times_delta < 0) > 0:
-        #     print(torch.sum(times_delta < 0))
 
         assert times_delta.shape == (
             self.num_time_slots, self.history_length, self.history_length)
@@ -66,7 +72,7 @@ class Model(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6):
+    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=600):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
@@ -77,6 +83,7 @@ class Setting1(torch.nn.Module):
         self.num_stochastic_elements = num_stochastic_elements
         self.threshCollectTill = threshCollectTill
         self.threshTau = threshTau
+        self.budget = budget
 
         self.likelihood_data = []
         self.mu_data = []
@@ -135,9 +142,7 @@ class Setting1(torch.nn.Module):
                 mu, alpha, output = self.do_forward(
                     current_history, pending_history, last_mu, last_alpha)
 
-            if ((current_history.time_slots.shape[0]) > self.threshCollectTill * total_num_time_slots) and (output.min() > last_score + self.threshTau):
-                # print("Rejected", pending_history[current_history.time_slots.argmin(
-                # )], 'Score: ', output.min().item())
+            if ((current_history.time_slots.shape[0]) > self.threshCollectTill * self.budget) and ((current_history.time_slots.shape[0]) < self.budget) and (output.min() > last_score + self.threshTau):
                 break
 
             last_score = output.min().item()
@@ -234,6 +239,7 @@ if __name__ == '__main__':
     parser.add_argument("--TestLen")
     parser.add_argument("--ThreshTau")
     parser.add_argument("--ThreshCollectTill")
+    parser.add_argument("--Budget")
     args = parser.parse_args()
 
     train_len = int(args.TrainLen)
@@ -243,6 +249,7 @@ if __name__ == '__main__':
     thresh_collect_till = float(args.ThreshCollectTill)
     stochastic_elements = int(args.StocValue)
     thresh_tau = float(args.ThreshTau)
+    budget = float(args.Budget)
 
     omega = 2
     init_num_epochs = 300
@@ -261,7 +268,7 @@ if __name__ == '__main__':
 
     final_T = np.max(train_data_history.time_slots)
     setting1 = Setting1(stochastic_elements,
-                        thresh_collect_till, thresh_tau, final_T, omega, init_num_epochs, lr, epoch_decay)
+                        thresh_collect_till, thresh_tau, final_T, omega, init_num_epochs, lr, epoch_decay, budget)
 
     if mode == 1:
         # Mode 1
@@ -297,7 +304,7 @@ if __name__ == '__main__':
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
     import json
-    with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+    with open(f'logs-plot/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
         data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
         obj = json.dumps(data) + "\n"
         json_bytes = obj.encode('utf-8')
