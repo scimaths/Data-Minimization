@@ -304,7 +304,7 @@ if __name__ == '__main__':
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
     import json
-    with open(f'logs-plot/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+    with open(f'logs-final/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
         data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
         obj = json.dumps(data) + "\n"
         json_bytes = obj.encode('utf-8')

@@ -1,7 +1,7 @@
 #!/bin/bash
 for mode in 2
 do
-    for stoc in False True
+    for stoc in True False
     do
         for val in 50 60 70 80
         do 
