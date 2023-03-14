@@ -1,10 +1,10 @@
 from __future__ import annotations
 import torch
 import numpy as np
-from nll import History
+from nll import History, seed_everything
 
 class ReverseModel(torch.nn.Module):
-    def __init__(self, history: History, omega, specific_indices=None, mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15):
+    def __init__(self, history: History, omega, specific_indices=None, mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
         super().__init__()
         self.history = np.sort(history.time_slots).reshape(1, -1)
         self.num_time_slots = len(specific_indices) if specific_indices is not None else len(history.time_slots)
@@ -15,7 +15,7 @@ class ReverseModel(torch.nn.Module):
             self.final_T = np.max(history.time_slots) + epsilon
 
         self.times = torch.Tensor(np.tile(history.time_slots.reshape((1, -1)), (self.history_length + 1))). \
-                    flatten()[1:].view(self.history_length, self.history_length + 2)[:,:-1].reshape(self.history_length + 1, self.history_length)
+                    flatten()[1:].view(self.history_length, self.history_length + 2)[:,:-1].reshape(self.history_length + 1, self.history_length).to(device)
         if specific_indices is not None:
             self.times = self.times[specific_indices, :]
         assert self.times.shape == (self.num_time_slots, self.history_length)
@@ -55,7 +55,7 @@ class ReverseModel(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5):
+    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, device='cuda:0'):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
@@ -68,14 +68,16 @@ class Setting1(torch.nn.Module):
         self.likelihood_data = []
         self.mu_data = []
         self.alpha_data = []
+        self.lr = lr
+        self.device = device
 
     def do_forward(self, history: History, specific_elements=None, mu=None, alpha=None):
-        model = ReverseModel(history, omega=self.omega, specific_indices=specific_elements,  mu=mu, alpha=alpha, final_T=self.final_T)
+        model = ReverseModel(history, omega=self.omega, specific_indices=specific_elements,  mu=mu, alpha=alpha, final_T=self.final_T).to(self.device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999))
         
-        last_mu = model.mu.data
-        last_alpha = model.alpha.data
+        last_mu = model.mu.data.to('cpu')
+        last_alpha = model.alpha.data.to('cpu')
 
         idx = 0
         while (idx < self.num_epochs):
@@ -84,13 +86,13 @@ class Setting1(torch.nn.Module):
             output.sum().backward()
             optim.step()
             
-            model.alpha.data = torch.maximum(torch.nan_to_num(model.alpha.data), torch.Tensor([1e-3]))
-            model.mu.data = torch.maximum(torch.nan_to_num(model.mu.data), torch.Tensor([1e-3]))
+            model.alpha.data = torch.maximum(torch.nan_to_num(model.alpha.data), torch.Tensor([1e-3]).to(self.device))
+            model.mu.data = torch.maximum(torch.nan_to_num(model.mu.data), torch.Tensor([1e-3]).to(self.device))
 
-            last_mu = model.mu.data
-            last_alpha = model.alpha.data
+            last_mu = model.mu.data.to('cpu')
+            last_alpha = model.alpha.data.to('cpu')
             idx += 1
-        return last_mu, last_alpha, output
+        return last_mu, last_alpha, output.to('cpu')
 
     def greedy_algo(self, history: History, stochastic_gradient):
         b = history.time_slots.shape[0]
@@ -101,7 +103,7 @@ class Setting1(torch.nn.Module):
         last_mu = None
         last_alpha = None
 
-        while (current_history.time_slots.shape[0] > self.budget * b):
+        while (current_history.time_slots.shape[0] > (1 - self.budget) * b):
             if stochastic_gradient:
                 stochastic_idxs = np.random.choice(
                     current_history.time_slots.shape[0], self.stochastic_elements)
@@ -110,7 +112,7 @@ class Setting1(torch.nn.Module):
             else:
                 mu, alpha, output = self.do_forward(current_history, None, last_mu, last_alpha)
 
-            if (output.min() > last_score + self.threshTau) and (current_history.time_slots.shape[0] < self.threshRemoveTill * self.budget * b):
+            if (output.min() > last_score + self.threshTau) and (current_history.time_slots.shape[0] < (1 - self.threshRemoveTill * self.budget) * b):
                 # print("Rejected", pending_history[current_history.time_slots.argmin(
                 # )], 'Score: ', output.min().item())
                 break
@@ -118,6 +120,8 @@ class Setting1(torch.nn.Module):
             self.likelihood_data.append(output.min().item())
             self.mu_data.append(mu[:,0])
             self.alpha_data.append(alpha[:,0])
+
+            print(current_history.time_slots.shape[0], output.min().item())
 
             last_score = output.min().item()
             last_mu = mu
@@ -152,6 +156,7 @@ class Setting1(torch.nn.Module):
         error = 0
         actual = []
         pred = []
+        np.random.seed(0)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, history)
             actual.append(next_time_slot[curr])
@@ -171,6 +176,7 @@ class Setting1(torch.nn.Module):
         error = 0
         actual = []
         pred = []
+        np.random.seed(0)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, new_history)
             actual.append(next_time_slot[curr])
@@ -190,9 +196,12 @@ if __name__ == '__main__':
     parser.add_argument("--StocValue")
     parser.add_argument("--TrainLen")
     parser.add_argument("--TestLen")
+    parser.add_argument("--Budget")
     parser.add_argument("--ThreshTau")
     parser.add_argument("--ThreshRemoveTill")
     args = parser.parse_args()
+
+    seed_everything(0)
     
     train_len = int(args.TrainLen)
     test_len = int(args.TestLen)
@@ -209,7 +218,7 @@ if __name__ == '__main__':
         test_data = list(np.load(f))
     test_data_history = History(train_data[train_len:test_len+train_len])
 
-    setting1 = Setting1(int(args.StocValue), float(args.ThreshRemoveTill), float(args.ThreshTau), final_T=np.max(train_data_history.time_slots))
+    setting1 = Setting1(int(args.StocValue), float(args.ThreshRemoveTill), float(args.ThreshTau), final_T=np.max(train_data_history.time_slots), budget=float(args.Budget))
 
     mode = int(args.Mode)
     stochastic_gradient = bool(args.StocGrad)

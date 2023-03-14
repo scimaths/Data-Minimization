@@ -2,6 +2,18 @@ from __future__ import annotations
 import torch
 import numpy as np
 
+def seed_everything(seed: int):
+    import random, os
+    import numpy as np
+    import torch
+    
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 class History:
     def __init__(self, time_slots: list[int] = []):
@@ -16,7 +28,7 @@ class History:
 
 
 class Model(torch.nn.Module):
-    def __init__(self, history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15):
+    def __init__(self, history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
         super().__init__()
 
         self.history = np.sort(history.time_slots).reshape(1, -1)
@@ -34,7 +46,7 @@ class Model(torch.nn.Module):
             self.final_T = np.max(self.next_time_slot) + epsilon
 
         self.times = torch.Tensor(np.concatenate(
-            (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1))
+            (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1)).to(device)
         assert self.times.shape == (self.num_time_slots, self.history_length)
 
         if mu is None:
@@ -93,7 +105,7 @@ class Setting1(torch.nn.Module):
     def do_forward(self, history: History, next_time_slot, mu=None, alpha=None):
         device = 'cuda:0'
         model = Model(history, next_time_slot,
-                      self.omega, mu, alpha, final_T=self.final_T).to(device)
+                      self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999))
 
@@ -109,9 +121,9 @@ class Setting1(torch.nn.Module):
 
             # Prevent negative values
             model.alpha.data = torch.maximum(torch.nan_to_num(
-                model.alpha.data), torch.Tensor([1e-3])).to(device)
+                model.alpha.data), torch.Tensor([1e-3]).to(device))
             model.mu.data = torch.maximum(torch.nan_to_num(
-                model.mu.data), torch.Tensor([1e-3])).to(device)
+                model.mu.data), torch.Tensor([1e-3]).to(device))
 
             last_mu = model.mu.data.to('cpu')
             last_alpha = model.alpha.data.to('cpu')
@@ -146,6 +158,7 @@ class Setting1(torch.nn.Module):
                 break
 
             last_score = output.min().item()
+            print(last_score)
             last_mu = mu
             last_alpha = alpha
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
@@ -194,6 +207,7 @@ class Setting1(torch.nn.Module):
         actual = []
         pred = []
 
+        np.random.seed(0)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, history)
             actual.append(next_time_slot[curr])
@@ -219,7 +233,7 @@ class Setting1(torch.nn.Module):
         actual = []
         pred = []
         
-
+        np.random.seed(0)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, new_history)
             actual.append(next_time_slot[curr])
@@ -244,6 +258,8 @@ if __name__ == '__main__':
     parser.add_argument("--ThreshCollectTill")
     parser.add_argument("--Budget")
     args = parser.parse_args()
+
+    seed_everything(0)
 
     train_len = int(args.TrainLen)
     new_history_len = train_len
