@@ -55,15 +55,16 @@ class ReverseModel(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T):
+    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5):
         super().__init__()
-        self.omega = 2
-        self.num_epochs = 100
-        self.epoch_decay =  0.6
+        self.omega = omega
+        self.num_epochs = init_num_epochs
+        self.epoch_decay = epoch_decay
         self.final_T = final_T
         self.stochastic_elements = stochastic_elements
         self.threshRemoveTill = threshRemoveTill
         self.threshTau = threshTau
+        self.budget = budget
         self.likelihood_data = []
         self.mu_data = []
         self.alpha_data = []
@@ -71,7 +72,7 @@ class Setting1(torch.nn.Module):
     def do_forward(self, history: History, specific_elements=None, mu=None, alpha=None):
         model = ReverseModel(history, omega=self.omega, specific_indices=specific_elements,  mu=mu, alpha=alpha, final_T=self.final_T)
         optim = torch.optim.Adam(
-            model.parameters(), lr=1e-4, betas=(0.9, 0.999))
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999))
         
         last_mu = model.mu.data
         last_alpha = model.alpha.data
@@ -82,7 +83,6 @@ class Setting1(torch.nn.Module):
             output = model.forward()
             output.sum().backward()
             optim.step()
-            change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
             
             model.alpha.data = torch.maximum(torch.nan_to_num(model.alpha.data), torch.Tensor([1e-3]))
             model.mu.data = torch.maximum(torch.nan_to_num(model.mu.data), torch.Tensor([1e-3]))
@@ -101,7 +101,7 @@ class Setting1(torch.nn.Module):
         last_mu = None
         last_alpha = None
 
-        while (current_history.time_slots.shape[0] > 1):
+        while (current_history.time_slots.shape[0] > self.budget * b):
             if stochastic_gradient:
                 stochastic_idxs = np.random.choice(
                     current_history.time_slots.shape[0], self.stochastic_elements)
@@ -110,7 +110,7 @@ class Setting1(torch.nn.Module):
             else:
                 mu, alpha, output = self.do_forward(current_history, None, last_mu, last_alpha)
 
-            if (output.min() > last_score + self.threshTau) and (current_history.time_slots.shape[0] < self.threshRemoveTill * b):
+            if (output.min() > last_score + self.threshTau) and (current_history.time_slots.shape[0] < self.threshRemoveTill * self.budget * b):
                 # print("Rejected", pending_history[current_history.time_slots.argmin(
                 # )], 'Score: ', output.min().item())
                 break
@@ -122,7 +122,7 @@ class Setting1(torch.nn.Module):
             last_score = output.min().item()
             last_mu = mu
             last_alpha = alpha
-            self.num_epochs *= self.epoch_decay
+            self.num_epochs = max(self.num_epochs * self.epoch_decay, 100)
 
             if stochastic_gradient:
                 current_history.time_slots = np.concatenate(
@@ -202,6 +202,8 @@ if __name__ == '__main__':
         train_data = list(np.load(f))
     train_data_history = History(train_data[:train_len])
 
+    new_history_len = train_len
+
     test_data = None
     with open('data_exp16_test.npy', 'rb') as f:
         test_data = list(np.load(f))
@@ -230,8 +232,8 @@ if __name__ == '__main__':
         error, actual, pred, new_history_len = setting1.mode_2(
             train_data_history, test_data_history.time_slots, stochastic_gradient)
 
-        with open("likelihood-mode-2-rev-0.6", 'a') as f:
-            f.write("\n".join(map(str, setting1.likelihood_data)))
+        # with open("likelihood-mode-2-rev-0.6", 'a') as f:
+        #     f.write("\n".join(map(str, setting1.likelihood_data)))
 
         # with open("indexes-added-mode-2-rev", 'a') as f:
         #     f.write("\n".join(map(str, setting1.indexes_added)))
@@ -245,9 +247,9 @@ if __name__ == '__main__':
         # with open(f'degree-of-minimization-rev', 'a') as f:
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
-    # import json
-    # with open(f'logs/reverse_mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshRemoveTill-{args.ThreshRemoveTill}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
-    #     data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
-    #     obj = json.dumps(data) + "\n"
-    #     json_bytes = obj.encode('utf-8')
-    #     f.write(json_bytes)
+    import json
+    with open(f'logs/reverse_mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshRemoveTill-{args.ThreshRemoveTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+        data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
+        obj = json.dumps(data) + "\n"
+        json_bytes = obj.encode('utf-8')
+        f.write(json_bytes)

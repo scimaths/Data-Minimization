@@ -72,7 +72,7 @@ class Model(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=600):
+    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
@@ -91,13 +91,14 @@ class Setting1(torch.nn.Module):
         self.indexes_added = []
 
     def do_forward(self, history: History, next_time_slot, mu=None, alpha=None):
+        device = 'cuda:0'
         model = Model(history, next_time_slot,
-                      self.omega, mu, alpha, final_T=self.final_T)
+                      self.omega, mu, alpha, final_T=self.final_T).to(device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999))
 
-        last_mu = model.mu.data
-        last_alpha = model.alpha.data
+        last_mu = model.mu.data.to('cpu')
+        last_alpha = model.alpha.data.to('cpu')
 
         idx = 0
         while (idx < self.num_epochs):
@@ -108,15 +109,14 @@ class Setting1(torch.nn.Module):
 
             # Prevent negative values
             model.alpha.data = torch.maximum(torch.nan_to_num(
-                model.alpha.data), torch.Tensor([1e-3]))
+                model.alpha.data), torch.Tensor([1e-3])).to(device)
             model.mu.data = torch.maximum(torch.nan_to_num(
-                model.mu.data), torch.Tensor([1e-3]))
+                model.mu.data), torch.Tensor([1e-3])).to(device)
 
-            last_mu = model.mu.data
-            last_alpha = model.alpha.data
+            last_mu = model.mu.data.to('cpu')
+            last_alpha = model.alpha.data.to('cpu')
             idx += 1
-
-        return last_mu, last_alpha, output
+        return last_mu, last_alpha, output.to('cpu')
 
     def greedy_algo(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
         total_num_time_slots: int = history.time_slots.shape[0] + \
@@ -142,13 +142,13 @@ class Setting1(torch.nn.Module):
                 mu, alpha, output = self.do_forward(
                     current_history, pending_history, last_mu, last_alpha)
 
-            if ((current_history.time_slots.shape[0]) > self.threshCollectTill * self.budget) and ((current_history.time_slots.shape[0]) < self.budget) and (output.min() > last_score + self.threshTau):
+            if (current_history.time_slots.shape[0] > self.threshCollectTill * self.budget * total_num_time_slots) and (output.min() > last_score + self.threshTau):
                 break
 
             last_score = output.min().item()
             last_mu = mu
             last_alpha = alpha
-            self.num_epochs *= self.epoch_decay
+            self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
             self.likelihood_data.append(output.min().item())
             self.mu_data.append(mu[:, 0])
@@ -165,6 +165,9 @@ class Setting1(torch.nn.Module):
                     (current_history.time_slots, [pending_history[output.argmin()]]), axis=0)
                 pending_history = np.concatenate(
                     [pending_history[:output.argmin()], pending_history[output.argmin()+1:]])
+
+            if current_history.time_slots.shape[0] >= total_num_time_slots * self.budget:
+                break
 
         return current_history
 
@@ -243,6 +246,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     train_len = int(args.TrainLen)
+    new_history_len = train_len
     test_len = int(args.TestLen)
     mode = int(args.Mode)
     stochastic_gradient = bool(args.StocGrad)
@@ -304,7 +308,7 @@ if __name__ == '__main__':
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
     import json
-    with open(f'logs-final/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+    with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
         data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
         obj = json.dumps(data) + "\n"
         json_bytes = obj.encode('utf-8')
