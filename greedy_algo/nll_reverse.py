@@ -103,7 +103,7 @@ class Setting1(torch.nn.Module):
         last_mu = None
         last_alpha = None
 
-        while (current_history.time_slots.shape[0] > (1 - self.budget) * b):
+        while (current_history.time_slots.shape[0] > max(1, (1 - self.budget) * b)):
             if stochastic_gradient:
                 stochastic_idxs = np.random.choice(
                     current_history.time_slots.shape[0], self.stochastic_elements)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import torch
+import pickle
 import numpy as np
+from nll_sensitivity import Model_Sensitivity
 
 def seed_everything(seed: int):
     import random, os
@@ -25,7 +27,6 @@ class History:
     def add(self, time_slot: int):
         self.time_slots = np.concatenate(
             (self.time_slots, [time_slot]), axis=0)
-
 
 class Model(torch.nn.Module):
     def __init__(self, history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
@@ -61,9 +62,6 @@ class Model(torch.nn.Module):
         else:
             self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
         self.omega = omega
-        self.lambda_mu = lambda_mu
-        self.lambda_alpha = lambda_alpha
-
 
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
@@ -83,8 +81,9 @@ class Model(torch.nn.Module):
         return -values
 
 
+
 class Setting1(torch.nn.Module):
-    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5):
+    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, sensitivity=0.1):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
@@ -96,6 +95,7 @@ class Setting1(torch.nn.Module):
         self.threshCollectTill = threshCollectTill
         self.threshTau = threshTau
         self.budget = budget
+        self.sensitivity_weight = sensitivity
 
         self.likelihood_data = []
         self.mu_data = []
@@ -130,6 +130,48 @@ class Setting1(torch.nn.Module):
             idx += 1
         return last_mu, last_alpha, output.to('cpu')
 
+    def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None):
+        device = 'cuda:3'
+        model = Model_Sensitivity(history, next_time_slot,
+                      self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
+        optim = torch.optim.Adam(
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999))
+
+        last_mu = model.mu.data.to('cpu')
+        last_alpha = model.alpha.data.to('cpu')
+
+        idx = 0
+        while (idx < self.num_epochs):
+            optim.zero_grad()
+            output = model.forward()
+            output.sum().backward()
+            optim.step()
+
+            # Prevent negative values
+            model.alpha.data = torch.maximum(torch.nan_to_num(
+                model.alpha.data), torch.Tensor([1e-3]).to(device))
+            model.mu.data = torch.maximum(torch.nan_to_num(
+                model.mu.data), torch.Tensor([1e-3]).to(device))
+
+            last_mu = model.mu.data.to('cpu')
+            last_alpha = model.alpha.data.to('cpu')
+            idx += 1
+        
+        num_time_slots = next_time_slot.shape[0]
+        history_len = len(history) + 1
+        output = output.cpu().detach().numpy()[:, 0]
+        actual_indices = np.arange(
+            0, len(output), history_len * num_time_slots + 1)
+
+        actual_out = output[actual_indices]
+        other_out = np.delete(output, actual_indices).reshape(
+            num_time_slots, history_len * (num_time_slots - 1))
+        actual_other_delta = np.expand_dims(actual_out, axis=1) - other_out
+
+        total_score = actual_out + \
+            actual_other_delta.sum(axis=1) * self.sensitivity_weight
+        return last_mu, last_alpha, total_score
+
     def greedy_algo(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
         total_num_time_slots: int = history.time_slots.shape[0] + \
             next_time_slot.shape[0]
@@ -146,7 +188,7 @@ class Setting1(torch.nn.Module):
             if stochastic_gradient:
                 # :TODO fix random.choice to be random.sample
                 new_pending_history_indxs = np.random.choice(
-                    pending_history.shape[0], self.num_stochastic_elements)
+                    pending_history.shape[0], self.num_stochastic_elements, replace=False)
 
                 mu, alpha, output = self.do_forward(
                     current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha)
@@ -158,7 +200,7 @@ class Setting1(torch.nn.Module):
                 break
 
             last_score = output.min().item()
-            print(last_score)
+            # print(last_score)
             last_mu = mu
             last_alpha = alpha
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
@@ -183,6 +225,68 @@ class Setting1(torch.nn.Module):
                 break
 
         return current_history
+    
+    def greedy_algo_with_tests(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
+        total_num_time_slots: int = history.time_slots.shape[0] + \
+            next_time_slot.shape[0]
+        current_history: History = history
+        pending_history: np.ndarray = next_time_slot
+
+        _, _, curr_history_score = self.do_forward(
+            History(history.time_slots[:-1]), history.time_slots[-1:])
+        last_score = curr_history_score.min().item()
+        last_mu = None
+        last_alpha = None
+        histories = []
+
+        while (pending_history.shape[0] > 0):
+            if stochastic_gradient:
+                # :TODO fix random.choice to be random.sample
+                new_pending_history_indxs = np.random.choice(
+                    pending_history.shape[0], self.num_stochastic_elements, replace=False)
+
+                mu, alpha, output = self.do_forward_sensitivity(
+                    current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha)
+            else:
+                mu, alpha, output = self.do_forward_sensitivity(
+                    current_history, pending_history, last_mu, last_alpha)
+
+            if (current_history.time_slots.shape[0] > self.threshCollectTill * self.budget * total_num_time_slots) and (output.min() > last_score + self.threshTau):
+                break
+
+            last_score = output.min().item()
+            # print(last_score)
+            last_mu = mu
+            last_alpha = alpha
+            self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
+
+            self.likelihood_data.append(output.min().item())
+            self.mu_data.append(mu[:, 0])
+            self.alpha_data.append(alpha[:, 0])
+            self.indexes_added.append(new_pending_history_indxs[output.argmin()])
+
+            if stochastic_gradient:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots, [pending_history[new_pending_history_indxs][output.argmin()]]), axis=0)
+                pending_history = np.concatenate(
+                    [pending_history[:new_pending_history_indxs[output.argmin()]], pending_history[new_pending_history_indxs[output.argmin()]+1:]])
+            else:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots, [pending_history[output.argmin()]]), axis=0)
+                pending_history = np.concatenate(
+                    [pending_history[:output.argmin()], pending_history[output.argmin()+1:]])
+
+            if current_history.time_slots.shape[0] % 5 == 0:
+                histories.append(current_history.time_slots)
+                print(current_history.time_slots.shape[0])
+
+            if current_history.time_slots.shape[0] >= total_num_time_slots * self.budget:
+                break
+            
+        with open('nll_sens_histories.pkl', 'wb') as f:
+            pickle.dump(histories, f)
+
+        return current_history
 
     def predict(self, mu, alpha, history: History):
         last_time = history.time_slots[-1]
@@ -198,7 +302,7 @@ class Setting1(torch.nn.Module):
                 break
         return last_time
 
-    def mode_1(self, history: History, next_time_slot: np.ndarray):
+    def mode_1(self, history: History, next_time_slot: np.ndarray, seed=0):
         mu, alpha, _ = self.do_forward(
             History(history.time_slots[:-1]), history.time_slots[-1:])
 
@@ -207,7 +311,7 @@ class Setting1(torch.nn.Module):
         actual = []
         pred = []
 
-        np.random.seed(0)
+        np.random.seed(seed)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, history)
             actual.append(next_time_slot[curr])
@@ -217,8 +321,53 @@ class Setting1(torch.nn.Module):
             curr += 1
 
         return error, actual, pred
+    
+    def mode_3(self, history: History, next_time_slot: np.ndarray, seed=0):
+        original_history_len = len(history.time_slots)
+        mu, alpha, _ = self.do_forward(
+            History(history.time_slots[-int(self.budget * len(history.time_slots)):-1]), history.time_slots[-1:])
 
-    def mode_2(self, history: History, next_time_slot, stochastic_gradient: bool):
+        # print("Mu", mu, "\nAlpha", alpha)
+        curr = 0
+        error = 0
+        actual = []
+        pred = []
+
+        np.random.seed(seed)
+        while (curr < next_time_slot.shape[0]):
+            value = self.predict(mu, alpha, history)
+            actual.append(next_time_slot[curr])
+            pred.append(value.item())
+            error += (value-next_time_slot[curr])**2
+            history.add(next_time_slot[curr])
+            curr += 1
+
+        return error, actual, pred, int(self.budget * original_history_len)
+
+    def mode_4(self, history: History, next_time_slot, stochastic_gradient: bool, seed=0):
+        original_history_len = len(history.time_slots)
+        random_slots = history.time_slots[np.random.choice(list(range(original_history_len)), size=(int(original_history_len * self.budget),), replace=False)]
+        mu, alpha, _ = self.do_forward(
+            History(random_slots[:-1]), random_slots[-1:])
+
+        # print("Mu", mu, "\nAlpha", alpha)
+        curr = 0
+        error = 0
+        actual = []
+        pred = []
+
+        np.random.seed(seed)
+        while (curr < next_time_slot.shape[0]):
+            value = self.predict(mu, alpha, history)
+            actual.append(next_time_slot[curr])
+            pred.append(value.item())
+            error += (value-next_time_slot[curr])**2
+            history.add(next_time_slot[curr])
+            curr += 1
+
+        return error, actual, pred, int(self.budget * original_history_len)
+
+    def mode_2(self, history: History, next_time_slot, stochastic_gradient: bool, seed=0):
         new_history: History = self.greedy_algo(
             History(history.time_slots[:1]), history.time_slots[1:], stochastic_gradient)
 
@@ -233,7 +382,7 @@ class Setting1(torch.nn.Module):
         actual = []
         pred = []
         
-        np.random.seed(0)
+        np.random.seed(seed)
         while (curr < next_time_slot.shape[0]):
             value = self.predict(mu, alpha, new_history)
             actual.append(next_time_slot[curr])
@@ -244,6 +393,25 @@ class Setting1(torch.nn.Module):
 
         return error, actual, pred, new_history_len
 
+    def test_histories(self, history_file, test_time_slots, seed=0):
+        all_histories = pickle.load(open(history_file, 'rb'))
+        for np_history in all_histories:
+            history = History(np.sort(np_history))
+            mu, alpha, _ = self.do_forward(History(history.time_slots[:-1]), history.time_slots[-1:])
+            curr = 0
+            error = 0
+            actual = []
+            pred = []
+
+            np.random.seed(seed)
+            while (curr < test_time_slots.shape[0]):
+                value = self.predict(mu, alpha, history)
+                actual.append(test_time_slots[curr])
+                pred.append(value.item())
+                error += (value-test_time_slots[curr])**2
+                history.add(test_time_slots[curr])
+                curr += 1
+            print(error[0,0].item()/len(test_time_slots), len(np_history))
 
 if __name__ == '__main__':
 
@@ -257,9 +425,10 @@ if __name__ == '__main__':
     parser.add_argument("--ThreshTau")
     parser.add_argument("--ThreshCollectTill")
     parser.add_argument("--Budget")
+    parser.add_argument("--Seed", type=int, default=0)
     args = parser.parse_args()
 
-    seed_everything(0)
+    seed_everything(args.Seed)
 
     train_len = int(args.TrainLen)
     new_history_len = train_len
@@ -269,11 +438,11 @@ if __name__ == '__main__':
     thresh_collect_till = float(args.ThreshCollectTill)
     stochastic_elements = int(args.StocValue)
     thresh_tau = float(args.ThreshTau)
-    budget = float(args.Budget)
+    budget = float(args.Budget)/1000
 
     omega = 2
     init_num_epochs = 300
-    lr = 0.0001
+    lr = 0.01
     epoch_decay = 0.6
 
     train_data = None
@@ -297,16 +466,31 @@ if __name__ == '__main__':
         # And then predict on test data
         # Parameters not updated in between predictions
         error, actual, pred = setting1.mode_1(
-            train_data_history, test_data_history.time_slots)
+            train_data_history, test_data_history.time_slots, args.Seed)
+        print(error[0,0].item()/500)
 
-    else:
+    elif mode == 3:
+        error, actual, pred, new_history_len = setting1.mode_3(
+            train_data_history, test_data_history.time_slots, args.Seed)
+        print(error[0,0].item()/500, new_history_len)
+    
+    elif mode == 4:
+        error, actual, pred, new_history_len = setting1.mode_4(
+            train_data_history, test_data_history.time_slots, args.Seed
+        )
+        print(error[0,0].item()/500, new_history_len)
+
+    elif mode == 2:
         # Mode 2
         # With Data Minimization
         # Use complete training data to get function params and minimized history
         # And then predict on test data
         # Parameters not updated in between predictions
-        error, actual, pred, new_history_len = setting1.mode_2(
-            train_data_history, test_data_history.time_slots, stochastic_gradient)
+        # error, actual, pred, new_history_len = setting1.mode_2(
+        #     train_data_history, test_data_history.time_slots, stochastic_gradient, args.Seed)
+        # print(error[0,0].item()/500, new_history_len)
+
+        setting1.greedy_algo_with_tests(History(train_data_history.time_slots[:2]), train_data_history.time_slots[2:], stochastic_gradient)
 
         # with open("likelihood-mode-2-0.6", 'a') as f:
         #     f.write("\n".join(map(str, setting1.likelihood_data)))
@@ -323,9 +507,12 @@ if __name__ == '__main__':
         # with open(f'degree-of-minimization', 'a') as f:
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
-    import json
-    with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
-        data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
-        obj = json.dumps(data) + "\n"
-        json_bytes = obj.encode('utf-8')
-        f.write(json_bytes)
+    elif mode == 5:
+        setting1.test_histories('nll_histories.pkl', test_data_history.time_slots, seed=args.Seed)
+
+    # import json
+    # with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:
+        # data = {"Error": error.item(), "Actual": actual, "Pred": pred, "Degree of Minimization": new_history_len}
+        # obj = json.dumps(data) + "\n"
+        # json_bytes = obj.encode('utf-8')
+        # f.write(json_bytes)

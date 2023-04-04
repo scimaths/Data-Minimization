@@ -15,16 +15,24 @@ class History:
             (self.time_slots, [time_slot]), axis=0)
 
 
-class Model(torch.nn.Module):
-    def __init__(self, history, next_time_slot, omega, lambda_mu=10, lambda_alpha=15):
+class Model_Sensitivity(torch.nn.Module):
+    def __init__(self, history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
         super().__init__()
+        
         self.history = history.time_slots.reshape(1, -1)
         self.next_time_slot = next_time_slot.reshape(-1, 1)
+        
         self.num_time_slots = self.next_time_slot.shape[0]
         self.history_length = self.history.shape[1] + 1
+        self.omega = omega
+        self.lambda_mu = lambda_mu
+        self.lambda_alpha = lambda_alpha
+
         epsilon = 1
-        self.final_T = np.max(self.next_time_slot) + epsilon
-        # print(self.history.shape, self.next_time_slot.shape, self.final_T.shape)
+        self.final_T = final_T
+        if not final_T:
+            self.final_T = np.max(self.next_time_slot) + epsilon
+
         self.times = np.concatenate(
             (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1)
         self.times = np.repeat(
@@ -36,32 +44,40 @@ class Model(torch.nn.Module):
             np.repeat(self.next_time_slot[:, 0], self.history_length), self.num_time_slots)
         self.times = np.sort(self.times, axis=1)
         self.times = torch.Tensor(
-            self.times[np.where(self.times[:, -1] - self.times[:, -2] > 1e-5)])
+            self.times[np.where(self.times[:, -1] - self.times[:, -2] > 1e-5)]).to(device)
 
-        self.num_params = ((self.num_time_slots-1) *
-                           self.history_length + 1)*self.num_time_slots
+        self.num_params = ((self.num_time_slots-1)*self.history_length+1)*self.num_time_slots
         assert self.times.shape == (self.num_params, self.history_length)
 
-        self.mu = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
-        self.alpha = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
+        if mu is None:
+            self.mu = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
+        else:
+            self.mu = torch.nn.Parameter(torch.Tensor(mu))
+        
+        if alpha is None:
+            self.alpha = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
+        else:
+            self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
         self.omega = omega
         self.lambda_mu = lambda_mu
         self.lambda_alpha = lambda_alpha
 
-    def forward(self):
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
+
         assert times_delta.shape == (
             self.num_params, self.history_length, self.history_length)
+        
+        self.times_delta_exp = torch.exp(-times_delta).sum(dim=2)
 
-        summed = torch.log(self.mu + self.alpha *
-                           torch.exp(-times_delta).sum(dim=2)).sum(dim=1).unsqueeze(1)
+    def forward(self):
+        summed = torch.log(self.mu + self.alpha * self.times_delta_exp).sum(dim=1).unsqueeze(1)
         alpha_term = (self.alpha/self.omega)*(1-torch.exp(-self.omega *
                                                           (self.final_T-self.times))).sum(dim=1).unsqueeze(1)
         values = summed - alpha_term - (self.mu*self.final_T)
-        return -values + (self.alpha**2)*self.lambda_alpha + (self.mu**2)*self.lambda_mu
-
+        # return -values + (self.alpha**2)*self.lambda_alpha + (self.mu**2)*self.lambda_mu
+        return -values
 
 class Setting1(torch.nn.Module):
     def __init__(self, sensitivity_weight=0.5):
@@ -71,11 +87,14 @@ class Setting1(torch.nn.Module):
         self.sensitivity_weight = sensitivity_weight
 
     def do_forward(self, history: History, next_time_slot):
-        model = Model(history, next_time_slot, self.omega)
+        device = 'cuda:3'
+        model = Model_Sensitivity(history, next_time_slot,
+                      self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
         optim = torch.optim.Adam(
-            model.parameters(), lr=0.01, betas=(0.9, 0.999))
-        last_mu = torch.zeros_like(model.mu.data)
-        last_alpha = torch.zeros_like(model.alpha.data)
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999))
+
+        last_mu = model.mu.data.to('cpu')
+        last_alpha = model.alpha.data.to('cpu')
 
         idx = 0
         while (idx < self.num_epochs):
@@ -83,14 +102,20 @@ class Setting1(torch.nn.Module):
             output = model.forward()
             output.sum().backward()
             optim.step()
-            change = (last_mu-model.mu)**2 + (last_alpha-model.alpha)**2
-            last_mu = model.mu.data
-            last_alpha = model.alpha.data
-            idx += 1
 
+            # Prevent negative values
+            model.alpha.data = torch.maximum(torch.nan_to_num(
+                model.alpha.data), torch.Tensor([1e-3]).to(device))
+            model.mu.data = torch.maximum(torch.nan_to_num(
+                model.mu.data), torch.Tensor([1e-3]).to(device))
+
+            last_mu = model.mu.data.to('cpu')
+            last_alpha = model.alpha.data.to('cpu')
+            idx += 1
+        
         num_time_slots = next_time_slot.shape[0]
         history_len = len(history) + 1
-        output = output.detach().numpy()[:, 0]
+        output = output.cpu().detach().numpy()[:, 0]
         actual_indices = np.arange(
             0, len(output), history_len * num_time_slots + 1)
 
@@ -101,8 +126,7 @@ class Setting1(torch.nn.Module):
 
         total_score = actual_out + \
             actual_other_delta.sum(axis=1) * self.sensitivity_weight
-
-        return model.mu.data, model.alpha.data, total_score
+        return last_mu, last_alpha, total_score
 
     def greedy_algo(self, history: History, next_time_slot):
         current_history = history
