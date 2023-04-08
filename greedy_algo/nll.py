@@ -107,7 +107,7 @@ class Setting1(torch.nn.Module):
         model = Model(history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
         optim = torch.optim.Adam(
-            model.parameters(), lr=self.lr, betas=(0.9, 0.999))
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999),)
 
         last_mu = model.mu.data.to('cpu')
         last_alpha = model.alpha.data.to('cpu')
@@ -190,7 +190,7 @@ class Setting1(torch.nn.Module):
             if stochastic_gradient:
                 # :TODO fix random.choice to be random.sample
                 new_pending_history_indxs = np.random.choice(
-                    pending_history.shape[0], self.num_stochastic_elements, replace=False)
+                    pending_history.shape[0], min(pending_history.shape[0], self.num_stochastic_elements), replace=False)
 
                 mu, alpha, output = self.do_forward(
                     current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha)
