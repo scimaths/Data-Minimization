@@ -16,14 +16,16 @@ class History:
 
 
 class Model_Sensitivity(torch.nn.Module):
-    def __init__(self, history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
+    def __init__(self, history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
         super().__init__()
         
-        self.history = history.time_slots.reshape(1, -1)
-        self.next_time_slot = next_time_slot.reshape(-1, 1)
-        
-        self.num_time_slots = self.next_time_slot.shape[0]
-        self.history_length = self.history.shape[1] + 1
+        # self.history = history.time_slots.reshape(1, -1) # (1, H)
+        # self.next_time_slot = next_time_slot.reshape(-1, 1) # (T, 1) 
+        self.history = np.sort(history.time_slots).reshape(1, -1)
+        self.next_time_slot = np.sort(next_time_slot).reshape(-1, 1)
+
+        self.num_time_slots = self.next_time_slot.shape[0] # T
+        self.history_length = self.history.shape[1] + 1 # (H+1)
         self.omega = omega
         self.lambda_mu = lambda_mu
         self.lambda_alpha = lambda_alpha
@@ -33,18 +35,70 @@ class Model_Sensitivity(torch.nn.Module):
         if not final_T:
             self.final_T = np.max(self.next_time_slot) + epsilon
 
+        # Comments made for T=2; H=2;
+
         self.times = np.concatenate(
-            (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1)
+            (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1) # (T, H) -> (T, H+1)
+        
+        # H1 H2 T1
+        # H1 H2 T2
+
         self.times = np.repeat(
-            self.times, self.history_length * self.num_time_slots, axis=0)
-        row_pos = np.arange(len(self.times))
+            self.times, self.history_length * self.num_time_slots, axis=0) # (T*((H+1)*T), H+1)
+        
+        # H1 H2 T1
+        # H1 H2 T1
+        # H1 H2 T1
+        # H1 H2 T1
+        # H1 H2 T1
+        # H1 H2 T1
+        # H1 H2 T2
+        # H1 H2 T2
+        # H1 H2 T2
+        # H1 H2 T2
+        # H1 H2 T2
+        # H1 H2 T2
+
+        row_pos = np.arange(len(self.times)) # (T*(H+1)*T,)
         col_pos = np.tile(np.arange(self.history_length),
-                          self.num_time_slots**2)
+                          self.num_time_slots**2) # (T*(H+1)*T,)
+
+
         self.times[tuple([row_pos, col_pos])] = np.tile(
-            np.repeat(self.next_time_slot[:, 0], self.history_length), self.num_time_slots)
-        self.times = np.sort(self.times, axis=1)
+            np.repeat(self.next_time_slot[:, 0], self.history_length), self.num_time_slots) # (T*(H+1)*T,H+1)
+
+        # T1 H2 T1
+        # H1 T1 T1
+        # H1 H2 T1
+        # T2 H2 T1
+        # H1 T2 T1
+        # H1 H2 T2
+        # T1 H2 T2
+        # H1 T1 T2
+        # H1 H2 T1
+        # T2 H2 T2
+        # H1 T2 T2
+        # H1 H2 T2
+        
+        self.times = np.sort(self.times, axis=1) 
+        difference = self.times[:, 1:] - self.times[:, :-1]
+        min_diff = np.min(difference, axis=1)
         self.times = torch.Tensor(
-            self.times[np.where(self.times[:, -1] - self.times[:, -2] > 1e-5)]).to(device)
+            # self.times[np.where(self.times[:, -1] - self.times[:, -2] > 1e-3)])#.to(device) # ()
+            self.times[np.where(min_diff > 1e-5)])#.to(device) # ()
+
+        # T1 H2 T1 x
+        # H1 T1 T1 x
+        # H1 H2 T1
+        # T2 H2 T1
+        # H1 T2 T1
+        # H1 H2 T2
+        # T1 H2 T2
+        # H1 T1 T2
+        # H1 H2 T1
+        # T2 H2 T2 x
+        # H1 T2 T2 x
+        # H1 H2 T2
 
         self.num_params = ((self.num_time_slots-1)*self.history_length+1)*self.num_time_slots
         assert self.times.shape == (self.num_params, self.history_length)
@@ -52,12 +106,14 @@ class Model_Sensitivity(torch.nn.Module):
         if mu is None:
             self.mu = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
         else:
-            self.mu = torch.nn.Parameter(torch.Tensor(mu))
+            self.mu = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_params))
+            # self.mu = torch.nn.Parameter(torch.Tensor(mu))
         
         if alpha is None:
             self.alpha = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
         else:
-            self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
+            self.alpha = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_params))
+            # self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
         self.omega = omega
         self.lambda_mu = lambda_mu
         self.lambda_alpha = lambda_alpha
@@ -65,19 +121,21 @@ class Model_Sensitivity(torch.nn.Module):
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
+        self.times = self.times.to(device)
 
         assert times_delta.shape == (
             self.num_params, self.history_length, self.history_length)
         
         self.times_delta_exp = torch.exp(-times_delta).sum(dim=2)
+        self.times_delta_exp = self.times_delta_exp.to(device)
 
     def forward(self):
         summed = torch.log(self.mu + self.alpha * self.times_delta_exp).sum(dim=1).unsqueeze(1)
         alpha_term = (self.alpha/self.omega)*(1-torch.exp(-self.omega *
                                                           (self.final_T-self.times))).sum(dim=1).unsqueeze(1)
         values = summed - alpha_term - (self.mu*self.final_T)
-        # return -values + (self.alpha**2)*self.lambda_alpha + (self.mu**2)*self.lambda_mu
-        return -values
+        return -values + (self.alpha**2)*self.lambda_alpha + (self.mu**2)*self.lambda_mu
+        # return -values
 
 class Setting1(torch.nn.Module):
     def __init__(self, sensitivity_weight=0.5):

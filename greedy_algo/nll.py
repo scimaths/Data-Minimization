@@ -83,7 +83,7 @@ class Model(torch.nn.Module):
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, sensitivity=0.1):
+    def __init__(self, num_stochastic_elements: int, threshCollectTill: float, threshTau: float, final_T: float, omega=1, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, sensitivity=0.1):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
@@ -130,10 +130,10 @@ class Setting1(torch.nn.Module):
             idx += 1
         return last_mu, last_alpha, output.to('cpu')
 
-    def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None):
-        device = 'cuda:3'
+    def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
+        device = 'cuda:1'
         model = Model_Sensitivity(history, next_time_slot,
-                      self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
+                      self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999))
 
@@ -157,7 +157,7 @@ class Setting1(torch.nn.Module):
             last_alpha = model.alpha.data.to('cpu')
             idx += 1
         
-        num_time_slots = next_time_slot.shape[0]
+        num_time_slots = len(next_time_slot)
         history_len = len(history) + 1
         output = output.cpu().detach().numpy()[:, 0]
         actual_indices = np.arange(
@@ -170,6 +170,8 @@ class Setting1(torch.nn.Module):
 
         total_score = actual_out + \
             actual_other_delta.sum(axis=1) * self.sensitivity_weight
+        # print(total_score)
+        
         return last_mu, last_alpha, total_score
 
     def greedy_algo(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
@@ -237,6 +239,7 @@ class Setting1(torch.nn.Module):
         last_score = curr_history_score.min().item()
         last_mu = None
         last_alpha = None
+        arg_min = None
         histories = []
 
         while (pending_history.shape[0] > 0):
@@ -246,10 +249,10 @@ class Setting1(torch.nn.Module):
                     pending_history.shape[0], self.num_stochastic_elements, replace=False)
 
                 mu, alpha, output = self.do_forward_sensitivity(
-                    current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha)
+                    current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha, arg_min)
             else:
                 mu, alpha, output = self.do_forward_sensitivity(
-                    current_history, pending_history, last_mu, last_alpha)
+                    current_history, pending_history, last_mu, last_alpha, arg_min)
 
             if (current_history.time_slots.shape[0] > self.threshCollectTill * self.budget * total_num_time_slots) and (output.min() > last_score + self.threshTau):
                 break
@@ -258,6 +261,7 @@ class Setting1(torch.nn.Module):
             # print(last_score)
             last_mu = mu
             last_alpha = alpha
+            arg_min = output.argmin()
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
             self.likelihood_data.append(output.min().item())
@@ -289,7 +293,7 @@ class Setting1(torch.nn.Module):
         return current_history
 
     def predict(self, mu, alpha, history: History):
-        last_time = history.time_slots[-1]
+        last_time = history.time_slots[-1] + 1e-10
         lambda_max = mu + alpha * \
             np.exp((last_time - history.time_slots) * -1 * self.omega).sum()
         while (True):
@@ -438,7 +442,7 @@ if __name__ == '__main__':
     thresh_collect_till = float(args.ThreshCollectTill)
     stochastic_elements = int(args.StocValue)
     thresh_tau = float(args.ThreshTau)
-    budget = float(args.Budget)/1000
+    budget = float(args.Budget)/    1000
 
     omega = 2
     init_num_epochs = 300
@@ -508,7 +512,7 @@ if __name__ == '__main__':
         #     f.write(f'{train_len}, {new_history_len}, {error}\n')
 
     elif mode == 5:
-        setting1.test_histories('nll_histories.pkl', test_data_history.time_slots, seed=args.Seed)
+        setting1.test_histories('nll_sens_histories.pkl', test_data_history.time_slots, seed=args.Seed)
 
     # import json
     # with open(f'logs/mode-{mode}-stochastic_gradient-{stochastic_gradient}-stochastic_value-{args.StocValue}-threshCollectTill-{args.ThreshCollectTill}-budget-{args.Budget}-threshTau-{args.ThreshTau}-train_len-{train_len}-test_len-{test_len}.json', 'wb') as f:

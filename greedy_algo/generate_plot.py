@@ -13,7 +13,7 @@ mode = [2, 1]
 for_back = ['forward', 'backward']
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--plot_type", default="Error")
+parser.add_argument("--plot_type", default="error")
 parser.add_argument("--plot_var", required=True, choices=variables)
 parser.add_argument("--budget", nargs="+", default=[0.6], type=float, choices=budgets)
 parser.add_argument("--coll_till", nargs="+", default=[0.5], type=float, choices=coll_till)
@@ -27,7 +27,14 @@ args = parser.parse_args()
 choices = [budgets, coll_till, train_len, stoch_val, mode, for_back]
 args_var = [args.budget, args.coll_till, args.train_len, args.stoch_val, args.mode, args.for_back]
 
-data_pickle = pickle.load(open('plots/err.pkl', 'rb'))
+if args.plot_type == "error":
+    data_pickle = pickle.load(open('plots/err.pkl', 'rb'))
+elif args.plot_type == "len":
+    data_pickle = pickle.load(open('plots/len.pkl', 'rb'))
+else:
+    raise Exception("Incorrect plot_type")
+
+division = (args.train_len if args.plot_var != "train_len" else 1) if args.plot_type == "len" else 500
 
 ref_strings = []
 indices = []
@@ -39,7 +46,8 @@ for idx, var in enumerate(variables):
         if len(args_var[idx]) == 1:
             ref_strings.append(f"{var}={args_var[idx][0]}".replace(" ", ""))
 
-plt.figure()
+fig = plt.figure()
+ax = fig.add_subplot(111)
 for combination in itertools.product(*indices):
     this_indices = [[val for _ in range(length)] for val in combination]
     label_str = []
@@ -52,10 +60,12 @@ for combination in itertools.product(*indices):
             label_str.append(f"{variables[idx]}={choices[idx][combination[idx-1]]}")
     this_indices = this_indices[:variable_idx] + [list(range(length))] + this_indices[variable_idx:]
     values = data_pickle[tuple(this_indices)]
-    plt.plot(choices[variable_idx], values, label=",".join(label_str), marker='o')
+    plt.plot(choices[variable_idx], values/division, label=",".join(label_str), marker='o')
+    for a, b in zip(choices[variable_idx], values/division):
+        plt.text(a, b, str(round(b, 3)))
 plt.xlabel(f'{args.plot_var}')
-plt.ylabel('error')
+plt.ylabel(f'{args.plot_type}')
 plt.legend()
-plt.title(f'Plot of error vs {args.plot_var}')
-plt.savefig(f"plots/{args.plot_var}_{'_'.join(ref_strings)}.png")
+plt.title(f'Plot of {args.plot_type} vs {args.plot_var}')
+plt.savefig(f"plots/{args.plot_type}_{args.plot_var}_{'_'.join(ref_strings)}.png")
 plt.close('all')
