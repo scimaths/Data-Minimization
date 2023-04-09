@@ -1,48 +1,67 @@
 from __future__ import annotations
 import torch
 import numpy as np
-from nll import History, seed_everything
+# from nll import History, seed_everything
 
 class ReverseModel(torch.nn.Module):
-    def __init__(self, history: History, omega, specific_indices=None, mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
+    def __init__(self, history: History, val_history: History, specific_indices=None, omega=1 , mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
         super().__init__()
         self.history = np.sort(history.time_slots).reshape(1, -1)
+        
         self.num_time_slots = len(specific_indices) if specific_indices is not None else len(history.time_slots)
         self.history_length = self.history.shape[1] - 1
+        self.omega = omega
+        self.lambda_mu = lambda_mu
+        self.lambda_alpha = lambda_alpha
+        
         epsilon = 1
         self.final_T = final_T
         if not final_T:
             self.final_T = np.max(history.time_slots) + epsilon
 
-        self.times = torch.Tensor(np.tile(history.time_slots.reshape((1, -1)), (self.history_length + 1))). \
-                    flatten()[1:].view(self.history_length, self.history_length + 2)[:,:-1].reshape(self.history_length + 1, self.history_length).to(device)
+        if val_history is not None:
+            self.times = torch.Tensor(np.tile(history.time_slots.reshape((1, -1)), (self.history_length + 1))). \
+                        flatten()[1:].view(self.history_length, self.history_length + 2)[:,:-1].reshape(self.history_length + 1, self.history_length)
+            self.times = torch.Tensor(np.concatenate(
+                (self.times, np.tile(val_history.time_slots, (self.history_length + 1, 1))), axis=1)).to(device)
+            assert self.times.shape == (self.history_length + 1, self.history_length + len(val_history))
+        else:
+            self.times = torch.Tensor(np.tile(history.time_slots.reshape((1, -1)), (self.history_length + 1))). \
+                        flatten()[1:].view(self.history_length, self.history_length + 2)[:,:-1].reshape(self.history_length + 1, self.history_length).to(device)
+            assert self.times.shape == (self.history_length + 1, self.history_length)
+
         if specific_indices is not None:
             self.times = self.times[specific_indices, :]
-        assert self.times.shape == (self.num_time_slots, self.history_length)
+        # assert self.times.shape == (self.num_time_slots, self.history_length)
 
         if mu is None:
             self.mu = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
         else:
-            self.mu = torch.nn.Parameter(torch.Tensor(mu))
+            self.mu = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_time_slots))
+            # self.mu = torch.nn.Parameter(torch.Tensor(mu))
 
         if alpha is None:
             self.alpha = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
         else:
-            self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
-        self.omega = omega
-        self.lambda_mu = lambda_mu
-        self.lambda_alpha = lambda_alpha
+            self.alpha = torch.nn.Parameter(torch.Tensor([[alpha[arg_min].item()]] * self.num_time_slots))
+            # self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
 
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
+        
         if torch.sum(times_delta < 0) > 0:
             print(torch.sum(times_delta < 0))
-        assert times_delta.shape == (
-            self.num_time_slots, self.history_length, self.history_length)
-
+        
+        if val_history is None:
+            assert times_delta.shape == (
+                self.num_time_slots, self.history_length, self.history_length)
+        else:
+            assert times_delta.shape == (
+                self.num_time_slots, self.history_length + len(val_history), self.history_length + len(val_history))
+        
         self.times_delta_exp = torch.exp(-times_delta).sum(dim=2)
 
     def forward(self):

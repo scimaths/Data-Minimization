@@ -3,6 +3,7 @@ import torch
 import pickle
 import numpy as np
 from nll_sensitivity import Model_Sensitivity
+from nll_reverse import ReverseModel
 
 def seed_everything(seed: int):
     import random, os
@@ -29,7 +30,7 @@ class History:
             (self.time_slots, [time_slot]), axis=0)
 
 class Model(torch.nn.Module):
-    def __init__(self, history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0'):
+    def __init__(self, history: History, val_history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
         super().__init__()
 
         self.history = np.sort(history.time_slots).reshape(1, -1)
@@ -45,30 +46,43 @@ class Model(torch.nn.Module):
         self.final_T = final_T
         if not final_T:
             self.final_T = np.max(self.next_time_slot) + epsilon
-
-        self.times = torch.Tensor(np.concatenate(
-            (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1)).to(device)
-        assert self.times.shape == (self.num_time_slots, self.history_length)
+        
+        if val_history is not None:
+            self.times = torch.Tensor(np.concatenate(
+                (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1))
+            self.times = torch.Tensor(np.concatenate(
+                (self.times, np.tile(val_history.time_slots, (self.num_time_slots, 1))), axis=1)).to(device)
+            assert self.times.shape == (self.num_time_slots, self.history_length + len(val_history))
+        else:
+            self.times = torch.Tensor(np.concatenate(
+                (np.tile(self.history, (self.num_time_slots, 1)), self.next_time_slot), axis=1)).to(device)
+            assert self.times.shape == (self.num_time_slots, self.history_length)
 
         if mu is None:
             self.mu = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
         else:
-            self.mu = torch.nn.Parameter(torch.Tensor(mu))
+            self.mu = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_time_slots))
+            # self.mu = torch.nn.Parameter(torch.Tensor(mu))
 
         if alpha is None:
             self.alpha = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
         else:
-            self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
+            # self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
+            self.alpha = torch.nn.Parameter(torch.Tensor([[alpha[arg_min].item()]] * self.num_time_slots))
         self.omega = omega
 
         times_delta = self.times.unsqueeze(2) - self.times.unsqueeze(1)
         times_delta[times_delta <= 0] = np.inf
-        times_delta *= self.omega
+        times_delta *= self.omega 
 
-        assert times_delta.shape == (
-            self.num_time_slots, self.history_length, self.history_length)
+        if val_history is not None:
+            assert times_delta.shape == (
+                self.num_time_slots, self.history_length + len(val_history), self.history_length + len(val_history))
+        else:
+            assert times_delta.shape == (
+                self.num_time_slots, self.history_length, self.history_length)
 
         self.times_delta_exp = torch.exp(-times_delta).sum(dim=2)
 
@@ -102,10 +116,10 @@ class Setting1(torch.nn.Module):
         self.alpha_data = []
         self.indexes_added = []
 
-    def do_forward(self, history: History, next_time_slot, mu=None, alpha=None):
+    def do_forward(self, history: History, val_history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
         device = 'cuda:0'
-        model = Model(history, next_time_slot,
-                      self.omega, mu, alpha, final_T=self.final_T, device=device).to(device)
+        model = Model(history, val_history, next_time_slot,
+                      self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999),)
 
@@ -129,6 +143,50 @@ class Setting1(torch.nn.Module):
             last_alpha = model.alpha.data.to('cpu')
             idx += 1
         return last_mu, last_alpha, output.to('cpu')
+
+    def do_forward_reverse(self, history: History, val_history: History, specific_elements=None, mu=None, alpha=None, arg_min=None):
+        device = 'cuda:0'
+        model = ReverseModel(history, val_history, specific_elements, 
+                             self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
+        optim = torch.optim.Adam(
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999))
+        
+        last_mu = model.mu.data.to('cpu')
+        last_alpha = model.alpha.data.to('cpu')
+
+        idx = 0
+        while (idx < self.num_epochs):
+            optim.zero_grad()
+            output = model.forward()
+            output.sum().backward()
+            optim.step()
+            
+            model.alpha.data = torch.maximum(torch.nan_to_num(
+                model.alpha.data), torch.Tensor([1e-3]).to(device))
+            model.mu.data = torch.maximum(torch.nan_to_num(
+                model.mu.data), torch.Tensor([1e-3]).to(device))
+
+            last_mu = model.mu.data.to('cpu')
+            last_alpha = model.alpha.data.to('cpu')
+            idx += 1
+        
+        prob_log = torch.zeros((len(last_mu),1))
+        mu = last_mu
+        alpha = last_alpha
+        omega = model.omega
+        train_data = model.times.to('cpu')
+        curr = train_data[:,0].reshape((-1,1))
+
+        # for i in range(1, len(train_data)):
+        #     inter = np.exp((train_data[:, i].reshape((-1,1)) - curr) * -1 * omega).reshape((-1,i))
+        #     inter = inter.sum(axis=1).reshape((-1,1))
+        #     prob_log += torch.log(mu + alpha * inter)
+        #     prob_log -= mu * train_data[:, i].reshape((-1,1))
+        #     prob_log += alpha/omega * (torch.exp(-1 * omega * (train_data[:, i].reshape((-1,1)) - curr[:, -1].reshape((-1,1)))) - 1) 
+        #     curr = torch.cat((curr, train_data[:, i].reshape((-1,1))), axis=1)
+        # likelihood_end_vals = -prob_log
+        
+        return last_mu, last_alpha, output.to('cpu') #torch.Tensor(likelihood_end_vals)
 
     def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
         device = 'cuda:1'
@@ -174,16 +232,20 @@ class Setting1(torch.nn.Module):
         
         return last_mu, last_alpha, total_score
 
-    def greedy_algo(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
+    def greedy_algo(self, history: History, val_history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
         total_num_time_slots: int = history.time_slots.shape[0] + \
             next_time_slot.shape[0]
         current_history: History = history
         pending_history: np.ndarray = next_time_slot
 
-        _, _, curr_history_score = self.do_forward(
-            History(history.time_slots[:-1]), history.time_slots[-1:])
-        last_score = curr_history_score.min().item()
+        if len(history) == 0:
+            last_score = np.inf
+        else:
+            _, _, curr_history_score = self.do_forward(
+                History(history.time_slots[:-1]), None, history.time_slots[-1:])
+            last_score = curr_history_score.min().item()
         last_mu = None
+        arg_min = None
         last_alpha = None
 
         while (pending_history.shape[0] > 0):
@@ -193,10 +255,10 @@ class Setting1(torch.nn.Module):
                     pending_history.shape[0], min(pending_history.shape[0], self.num_stochastic_elements), replace=False)
 
                 mu, alpha, output = self.do_forward(
-                    current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha)
+                    current_history, val_history, pending_history[new_pending_history_indxs], last_mu, last_alpha, arg_min)
             else:
                 mu, alpha, output = self.do_forward(
-                    current_history, pending_history, last_mu, last_alpha)
+                    current_history, val_history, pending_history, last_mu, last_alpha, arg_min)
 
             if (current_history.time_slots.shape[0] > self.threshCollectTill * self.budget * total_num_time_slots) and (output.min() > last_score + self.threshTau):
                 break
@@ -205,12 +267,13 @@ class Setting1(torch.nn.Module):
             # print(last_score)
             last_mu = mu
             last_alpha = alpha
+            arg_min = output.argmin()
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
             self.likelihood_data.append(output.min().item())
             self.mu_data.append(mu[:, 0])
             self.alpha_data.append(alpha[:, 0])
-            self.indexes_added.append(new_pending_history_indxs[output.argmin()])
+            # self.indexes_added.append(new_pending_history_indxs[output.argmin()])
 
             if stochastic_gradient:
                 current_history.time_slots = np.concatenate(
@@ -228,14 +291,14 @@ class Setting1(torch.nn.Module):
 
         return current_history
     
-    def greedy_algo_with_tests(self, history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
+    def greedy_algo_with_tests(self, history: History, val_history: History, next_time_slot: np.ndarray, stochastic_gradient: bool):
         total_num_time_slots: int = history.time_slots.shape[0] + \
             next_time_slot.shape[0]
         current_history: History = history
         pending_history: np.ndarray = next_time_slot
 
         _, _, curr_history_score = self.do_forward(
-            History(history.time_slots[:-1]), history.time_slots[-1:])
+            History(history.time_slots[:-1]), None, history.time_slots[-1:])
         last_score = curr_history_score.min().item()
         last_mu = None
         last_alpha = None
@@ -249,10 +312,10 @@ class Setting1(torch.nn.Module):
                     pending_history.shape[0], self.num_stochastic_elements, replace=False)
 
                 mu, alpha, output = self.do_forward_sensitivity(
-                    current_history, pending_history[new_pending_history_indxs], last_mu, last_alpha, arg_min)
+                    current_history, val_history, pending_history[new_pending_history_indxs], last_mu, last_alpha, arg_min)
             else:
                 mu, alpha, output = self.do_forward_sensitivity(
-                    current_history, pending_history, last_mu, last_alpha, arg_min)
+                    current_history, val_history, pending_history, last_mu, last_alpha, arg_min)
 
             if (current_history.time_slots.shape[0] > self.threshCollectTill * self.budget * total_num_time_slots) and (output.min() > last_score + self.threshTau):
                 break
@@ -290,6 +353,57 @@ class Setting1(torch.nn.Module):
         with open('nll_sens_histories.pkl', 'wb') as f:
             pickle.dump(histories, f)
 
+        return current_history
+
+    def greedy_algo_with_reverse(self, history: History, val_history: History, stochastic_gradient: bool):
+        total_num_time_slots: int = history.time_slots.shape[0]
+        current_history: History = history
+
+        _, _, curr_history_score = self.do_forward(
+            History(history.time_slots[:-1]), None, history.time_slots[-1:])
+        last_score = curr_history_score.min().item()
+        last_mu = None
+        last_alpha = None
+        arg_min = None
+
+        while (current_history.time_slots.shape[0] > max(1, (1 - self.budget) * total_num_time_slots)):
+            if stochastic_gradient:
+                # :TODO fix random.choice to be random.sample
+                stochastic_idxs = np.random.choice(
+                    current_history.time_slots.shape[0], self.num_stochastic_elements, replace=False)
+
+                mu, alpha, output = self.do_forward_reverse(
+                    current_history, val_history, stochastic_idxs, last_mu, last_alpha, arg_min)
+            else:
+                mu, alpha, output = self.do_forward_reverse(
+                    current_history, val_history, None, last_mu, last_alpha, arg_min)
+
+            if (current_history.time_slots.shape[0] < ( 1 - self.threshCollectTill * self.budget) * total_num_time_slots) and (output.min() > last_score + self.threshTau):
+                break
+
+            last_score = output.min().item()
+            # print(last_score)
+            last_mu = mu
+            last_alpha = alpha
+            arg_min = output.argmin()
+            self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
+
+            self.likelihood_data.append(output.min().item())
+            self.mu_data.append(mu[:, 0])
+            self.alpha_data.append(alpha[:, 0])
+
+            if stochastic_gradient:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots[:stochastic_idxs[output.argmin()]], current_history.time_slots[stochastic_idxs[output.argmin()] + 1:]), axis=0)
+            else:
+                current_history.time_slots = np.concatenate(
+                    (current_history.time_slots[:output.argmin()], current_history.time_slots[output.argmin()+1:]), axis=0)
+                # print(output.argmin(), output.min().item(), output[0].item())
+
+            
+            if current_history.time_slots.shape[0] >= total_num_time_slots * self.budget:
+                break
+            
         return current_history
 
     def predict(self, mu, alpha, history: History):

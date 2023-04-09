@@ -16,7 +16,7 @@ class History:
 
 
 class Model_Sensitivity(torch.nn.Module):
-    def __init__(self, history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
+    def __init__(self, history, val_history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
         super().__init__()
         
         # self.history = history.time_slots.reshape(1, -1) # (1, H)
@@ -112,7 +112,7 @@ class Model_Sensitivity(torch.nn.Module):
         if alpha is None:
             self.alpha = torch.nn.Parameter(torch.Tensor([[1]] * self.num_params))
         else:
-            self.alpha = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_params))
+            self.alpha = torch.nn.Parameter(torch.Tensor([[alpha[arg_min].item()]] * self.num_params))
             # self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
         self.omega = omega
         self.lambda_mu = lambda_mu
