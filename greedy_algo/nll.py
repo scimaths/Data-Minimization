@@ -170,12 +170,12 @@ class Setting1(torch.nn.Module):
             last_alpha = model.alpha.data.to('cpu')
             idx += 1
         
-        prob_log = torch.zeros((len(last_mu),1))
-        mu = last_mu
-        alpha = last_alpha
-        omega = model.omega
-        train_data = model.times.to('cpu')
-        curr = train_data[:,0].reshape((-1,1))
+        # prob_log = torch.zeros((len(last_mu),1))
+        # mu = last_mu
+        # alpha = last_alpha
+        # omega = model.omega
+        # train_data = model.times.to('cpu')
+        # curr = train_data[:,0].reshape((-1,1))
 
         # for i in range(1, len(train_data)):
         #     inter = np.exp((train_data[:, i].reshape((-1,1)) - curr) * -1 * omega).reshape((-1,i))
