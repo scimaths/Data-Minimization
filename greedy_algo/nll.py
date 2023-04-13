@@ -121,8 +121,8 @@ class Setting1(torch.nn.Module):
         model = Model(history, val_history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
-            model.parameters(), lr=self.lr, betas=(0.9, 0.999),)
-
+            model.parameters(), lr=self.lr, betas=(0.999, 0.999),)
+        # optim = torch.optim.SGD(model.parameters(), lr=self.lr)
         last_mu = model.mu.data.to('cpu')
         last_alpha = model.alpha.data.to('cpu')
 
@@ -189,7 +189,7 @@ class Setting1(torch.nn.Module):
         return last_mu, last_alpha, output.to('cpu') #torch.Tensor(likelihood_end_vals)
 
     def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
-        device = 'cuda:1'
+        device = 'cuda:0'
         model = Model_Sensitivity(history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(

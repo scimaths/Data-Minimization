@@ -52,8 +52,8 @@ class ReverseModel(torch.nn.Module):
         times_delta[times_delta <= 0] = np.inf
         times_delta *= self.omega
         
-        if torch.sum(times_delta < 0) > 0:
-            print(torch.sum(times_delta < 0))
+        # if torch.sum(times_delta < 0) > 0:
+        #     print(torch.sum(times_delta < 0))
         
         if val_history is None:
             assert times_delta.shape == (

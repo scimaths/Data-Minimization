@@ -3,9 +3,11 @@ from nll import *
 
 if __name__ == '__main__':
 
-    train_len = 1500
-    val_len = 500
-    test_len = 1000
+    train_len = 800
+    val_len = 200
+    test_len = 500
+    lr_data = 1e-3
+    num_epochs = 5000
     avgnum = 1
     train_data = None
     with open('data_exp16_train.npy', 'rb') as f:
@@ -67,7 +69,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a non-data minimization of train_len params
     final_T = train_data[-1] + 1e-10
-    setting1 = Setting1(None, None, None, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=None, budget=None, sensitivity=None)
+    setting1 = Setting1(None, None, None, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=None, budget=None, sensitivity=None)
     mu, alpha, _ = setting1.do_forward(History(train_data[:(train_len-1)]), None, [train_data[train_len-1]])
     mu = mu.item()
     alpha = alpha.item()
@@ -83,7 +85,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = train_data.copy()
+        curr = train_data.copy() + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
@@ -95,7 +97,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a data minimization of train_len params
     final_T = val_data[-1] + 1e-10
-    setting1 = Setting1(200, 0.6, 1e-3, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=1.0, budget=1.0, sensitivity=None)
+    setting1 = Setting1(200, 0.6, 1e-3, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=1.0, budget=1.0, sensitivity=None)
     
     # edit 1: We are choosing the initial value in the minimized training data as train_data[0] (it need not be)
 
@@ -111,7 +113,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = list(new_history.time_slots)
+        curr = list(new_history.time_slots) + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
@@ -123,7 +125,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a data minimization of train_len params with reverse mode
     final_T = val_data[-1] + 1e-10
-    setting1 = Setting1(None, 0.6, 1e-3, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=1.0, budget=1.0, sensitivity=None)
+    setting1 = Setting1(None, 0.6, 1e-3, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=1.0, budget=1.0, sensitivity=None)
     
     new_history = setting1.greedy_algo_with_reverse(History(train_data), History(val_data), False)
     print('new history', new_history.__len__())
@@ -137,7 +139,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = list(new_history.time_slots)
+        curr = list(new_history.time_slots) + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
@@ -149,7 +151,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a data minimization sensitivity of train_len params
     final_T = train_data[-1] + 1e-10
-    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=1.0, budget=1.0, sensitivity=None)
+    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=1.0, budget=1.0, sensitivity=None)
     new_history = setting1.greedy_algo(History([train_data[0]]), History(val_data), np.asarray(train_data[1:]), True)
     print('new history', new_history.__len__())
     removed_history = np.setdiff1d(train_data, new_history.time_slots)
@@ -162,7 +164,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = list(new_history.time_slots)
+        curr = list(new_history.time_slots) + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
@@ -174,7 +176,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a data minimization of train_len params by randomization
     final_T = train_data[-1] + 1e-10
-    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=0.6, budget=1.0, sensitivity=None)
+    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=0.6, budget=1.0, sensitivity=None)
     new_history = np.random.choice(train_data, int(0.6 * train_len), replace=False)
     print('new history', new_history.__len__())
     removed_history = np.setdiff1d(train_data, new_history)
@@ -187,7 +189,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = list(new_history)
+        curr = list(new_history) + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
@@ -200,7 +202,7 @@ if __name__ == '__main__':
 
     # try to get likelihood of actual data when alpha and data are obtained through a data minimization of train_len params by most recent
     final_T = train_data[-1] + 1e-10
-    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=300, lr=5e-3, epoch_decay=0.6, budget=1.0, sensitivity=None)
+    setting1 = Setting1(60, 0.6, 1e-3, final_T, omega, init_num_epochs=num_epochs, lr=lr_data, epoch_decay=0.6, budget=1.0, sensitivity=None)
     new_history = train_data[int(0.4 * train_len):]
     print('new history', new_history.__len__())
     removed_history = np.setdiff1d(train_data, new_history)
@@ -213,7 +215,7 @@ if __name__ == '__main__':
 
     avg = 0
     for j in range(avgnum):
-        curr = list(new_history)
+        curr = list(new_history) + val_data.copy()
         prob_log = 0
         for i in range(test_len):
             prob_log += np.log(mu + alpha * np.exp((test_data[i] - History(curr).time_slots) * -1 * omega).sum()) - mu * test_data[i] + alpha/omega * (np.exp(-1 * omega * (test_data[i] - curr[-1])) - 1) 
