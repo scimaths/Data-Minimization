@@ -121,7 +121,7 @@ class Setting1(torch.nn.Module):
         model = Model(history, val_history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
-            model.parameters(), lr=self.lr, betas=(0.999, 0.999),)
+            model.parameters(), lr=self.lr, betas=(0.9, 0.999),)
         # optim = torch.optim.SGD(model.parameters(), lr=self.lr)
         last_mu = model.mu.data.to('cpu')
         last_alpha = model.alpha.data.to('cpu')
@@ -188,9 +188,9 @@ class Setting1(torch.nn.Module):
         
         return last_mu, last_alpha, output.to('cpu') #torch.Tensor(likelihood_end_vals)
 
-    def do_forward_sensitivity(self, history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
+    def do_forward_sensitivity(self, history: History, val_history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
         device = 'cuda:0'
-        model = Model_Sensitivity(history, next_time_slot,
+        model = Model_Sensitivity(history, val_history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
             model.parameters(), lr=self.lr, betas=(0.9, 0.999))
@@ -324,13 +324,14 @@ class Setting1(torch.nn.Module):
             # print(last_score)
             last_mu = mu
             last_alpha = alpha
+            print(mu[output.argmin()], alpha[output.argmin()])
             arg_min = output.argmin()
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
             self.likelihood_data.append(output.min().item())
             self.mu_data.append(mu[:, 0])
             self.alpha_data.append(alpha[:, 0])
-            self.indexes_added.append(new_pending_history_indxs[output.argmin()])
+            # self.indexes_added.append(new_pending_history_indxs[output.argmin()])
 
             if stochastic_gradient:
                 current_history.time_slots = np.concatenate(
@@ -345,7 +346,7 @@ class Setting1(torch.nn.Module):
 
             if current_history.time_slots.shape[0] % 5 == 0:
                 histories.append(current_history.time_slots)
-                print(current_history.time_slots.shape[0])
+                # print(current_history.time_slots.shape[0])
 
             if current_history.time_slots.shape[0] >= total_num_time_slots * self.budget:
                 break
@@ -385,6 +386,7 @@ class Setting1(torch.nn.Module):
             # print(last_score)
             last_mu = mu
             last_alpha = alpha
+            # print(mu[output.argmin()], alpha[output.argmin()])
             arg_min = output.argmin()
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
