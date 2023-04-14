@@ -16,7 +16,7 @@ class History:
 
 
 class Model_Sensitivity(torch.nn.Module):
-    def __init__(self, history, val_history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
+    def __init__(self, history, val_history, next_time_slot, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:1', arg_min=None):
         super().__init__()
         
         # self.history = history.time_slots.reshape(1, -1) # (1, H)

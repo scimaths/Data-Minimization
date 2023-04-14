@@ -30,7 +30,7 @@ class History:
             (self.time_slots, [time_slot]), axis=0)
 
 class Model(torch.nn.Module):
-    def __init__(self, history: History, val_history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
+    def __init__(self, history: History, val_history: History, next_time_slot: np.ndarray, omega, mu, alpha, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:1', arg_min=None):
         super().__init__()
 
         self.history = np.sort(history.time_slots).reshape(1, -1)
@@ -117,7 +117,7 @@ class Setting1(torch.nn.Module):
         self.indexes_added = []
 
     def do_forward(self, history: History, val_history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
-        device = 'cuda:0'
+        device = 'cuda:1'
         model = Model(history, val_history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
@@ -145,7 +145,7 @@ class Setting1(torch.nn.Module):
         return last_mu, last_alpha, output.to('cpu')
 
     def do_forward_reverse(self, history: History, val_history: History, specific_elements=None, mu=None, alpha=None, arg_min=None):
-        device = 'cuda:0'
+        device = 'cuda:1'
         model = ReverseModel(history, val_history, specific_elements, 
                              self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
@@ -189,7 +189,7 @@ class Setting1(torch.nn.Module):
         return last_mu, last_alpha, output.to('cpu') #torch.Tensor(likelihood_end_vals)
 
     def do_forward_sensitivity(self, history: History, val_history: History, next_time_slot, mu=None, alpha=None, arg_min=None):
-        device = 'cuda:0'
+        device = 'cuda:1'
         model = Model_Sensitivity(history, val_history, next_time_slot,
                       self.omega, mu, alpha, final_T=self.final_T, device=device, arg_min=arg_min).to(device)
         optim = torch.optim.Adam(
@@ -357,6 +357,7 @@ class Setting1(torch.nn.Module):
         return current_history
 
     def greedy_algo_with_reverse(self, history: History, val_history: History, stochastic_gradient: bool):
+
         total_num_time_slots: int = history.time_slots.shape[0]
         current_history: History = history
 
@@ -377,7 +378,7 @@ class Setting1(torch.nn.Module):
                     current_history, val_history, stochastic_idxs, last_mu, last_alpha, arg_min)
             else:
                 mu, alpha, output = self.do_forward_reverse(
-                    current_history, val_history, None, last_mu, last_alpha, arg_min)
+                    current_history, None, None, last_mu, last_alpha, arg_min)
 
             if (current_history.time_slots.shape[0] < ( 1 - self.threshCollectTill * self.budget) * total_num_time_slots) and (output.min() > last_score + self.threshTau):
                 break
@@ -386,7 +387,13 @@ class Setting1(torch.nn.Module):
             # print(last_score)
             last_mu = mu
             last_alpha = alpha
-            # print(mu[output.argmin()], alpha[output.argmin()])
+
+            model_temp = ReverseModel(current_history, val_history, None, mu=last_mu, alpha=last_alpha, final_T=val_history.time_slots[-1], arg_min=None)
+            output = model_temp.forward()
+            
+            print(mu[output.argmin()], alpha[output.argmin()], output.argmin())
+            print(mu[mu.argmin()], alpha[alpha.argmin()], mu.argmin(), alpha.argmin())
+            print(mu[mu.argmax()], alpha[alpha.argmax()], mu.argmax(), alpha.argmax())
             arg_min = output.argmin()
             self.num_epochs = max(100, self.num_epochs * self.epoch_decay)
 
@@ -400,6 +407,9 @@ class Setting1(torch.nn.Module):
             else:
                 current_history.time_slots = np.concatenate(
                     (current_history.time_slots[:output.argmin()], current_history.time_slots[output.argmin()+1:]), axis=0)
+                # index_to_be_removed = np.random.randint(0, len(current_history.time_slots))
+                # current_history.time_slots = np.concatenate(
+                #     (current_history.time_slots[:index_to_be_removed], current_history.time_slots[index_to_be_removed+1:]), axis=0)
                 # print(output.argmin(), output.min().item(), output[0].item())
 
             

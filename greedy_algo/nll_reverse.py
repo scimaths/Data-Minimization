@@ -1,10 +1,10 @@
 from __future__ import annotations
 import torch
 import numpy as np
-# from nll import History, seed_everything
+
 
 class ReverseModel(torch.nn.Module):
-    def __init__(self, history: History, val_history: History, specific_indices=None, omega=1 , mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:0', arg_min=None):
+    def __init__(self, history: History, val_history: History, specific_indices=None, omega=1 , mu=None, alpha=None, final_T=None, lambda_mu=10, lambda_alpha=15, device='cuda:1', arg_min=None):
         super().__init__()
         self.history = np.sort(history.time_slots).reshape(1, -1)
         
@@ -37,6 +37,8 @@ class ReverseModel(torch.nn.Module):
         if mu is None:
             self.mu = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
+        elif arg_min is None:
+            self.mu = torch.nn.Parameter(torch.Tensor(mu)).to(device)
         else:
             self.mu = torch.nn.Parameter(torch.Tensor([[mu[arg_min].item()]] * self.num_time_slots))
             # self.mu = torch.nn.Parameter(torch.Tensor(mu))
@@ -44,6 +46,8 @@ class ReverseModel(torch.nn.Module):
         if alpha is None:
             self.alpha = torch.nn.Parameter(
                 torch.Tensor([[1]] * self.num_time_slots))
+        elif arg_min is None:
+            self.alpha = torch.nn.Parameter(torch.Tensor(alpha)).to(device)
         else:
             self.alpha = torch.nn.Parameter(torch.Tensor([[alpha[arg_min].item()]] * self.num_time_slots))
             # self.alpha = torch.nn.Parameter(torch.Tensor(alpha))
@@ -65,16 +69,18 @@ class ReverseModel(torch.nn.Module):
         self.times_delta_exp = torch.exp(-times_delta).sum(dim=2)
 
     def forward(self):
+
         summed = torch.log(self.mu + self.alpha *
                            self.times_delta_exp).sum(dim=1).unsqueeze(1)
         alpha_term = (self.alpha/self.omega)*(1-torch.exp(-self.omega *
                                                           (self.final_T-self.times))).sum(dim=1).unsqueeze(1)
-        values = summed - alpha_term - (self.mu*self.final_T)
+        latter = torch.min(self.times, 1).values.reshape((-1,1))
+        values = summed - alpha_term - (self.mu*self.final_T - self.mu*latter)
         return -values
 
 
 class Setting1(torch.nn.Module):
-    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, device='cuda:0'):
+    def __init__(self, stochastic_elements, threshRemoveTill, threshTau, final_T, omega=2, init_num_epochs=300, lr=1e-4, epoch_decay=0.6, budget=0.5, device='cuda:1'):
         super().__init__()
         self.omega = omega
         self.num_epochs = init_num_epochs
